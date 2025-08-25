@@ -14,6 +14,9 @@
     "categories": {
       "auth": {
         "fileuploadapp236eb12a": {}
+      },
+      "storage": {
+        "userfiles": {}
       }
     }
   }

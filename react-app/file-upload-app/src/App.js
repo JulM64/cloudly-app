@@ -1,25 +1,36 @@
-import logo from './logo.svg';
+import React from 'react';
 import './App.css';
+import { Amplify } from 'aws-amplify';
+import { Authenticator, withAuthenticator } from '@aws-amplify/ui-react';
+import '@aws-amplify/ui-react/styles.css';
+import awsExports from './aws-exports';
+import Appupload from './Appupload';
+
+Amplify.configure(awsExports);
 
 function App() {
   return (
     <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+      <Authenticator>
+        {({ signOut }) => (
+          <>
+            <header className="cloudly-header">
+              <div className="logo">
+                <img src="/cloudly-logo-simplified01.png" width="32" alt="Cloudly"/>
+                Cloudly
+              </div>
+              <button className="btn-3d" onClick={signOut}>Sign Out</button>
+            </header>
+
+            <main className="cloudly-main">
+              <h1 className="section-title">Secure PDF Upload</h1>
+              <Appupload/>
+            </main>
+          </>
+        )}
+      </Authenticator>
     </div>
   );
 }
 
-export default App;
+export default withAuthenticator(App);
