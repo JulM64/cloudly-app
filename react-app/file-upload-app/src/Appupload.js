@@ -23,17 +23,26 @@ function Appupload() {
   };
 
   return (
-    <div className="upload-wrapper">
-      <label className="btn-3d upload-label">
-        Upload PDF
-        <input
-          type="file"
-          accept=".pdf"
-          onChange={handleUpload}
-          style={{ display: 'none' }}
-        />
-      </label>
-    </div>
+    <>
+      {/* animated clouds */}
+      <div className="cloud"></div>
+      <div className="cloud"></div>
+      <div className="cloud"></div>
+
+      <div className="upload-wrapper">
+        <h2>Scan & Upload PDF</h2>
+        <label className="btn-3d upload-label">
+          Scan or Upload PDF
+          <input
+            type="file"
+            accept=".pdf"
+            capture="environment"
+            onChange={handleUpload}
+            style={{ display: 'none' }}
+          />
+        </label>
+      </div>
+    </>
   );
 }
 
