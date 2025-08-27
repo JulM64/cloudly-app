@@ -16,15 +16,23 @@ function App() {
           <>
             <header className="cloudly-header">
               <div className="logo">
-                <img src="/cloudly-logo-simplified01.png" width="32" alt="Cloudly"/>
+                <img src="/cloudly-logo-simplified01.png" width="32" alt="Cloudly" />
                 Cloudly
               </div>
+
+              <nav className="nav-links">
+                <a href="#home">Homepage</a>
+                <a href="#management">Management</a>
+                <a href="#notifications">Notifications</a>
+                <a href="#messages">Messages</a>
+              </nav>
+
               <button className="btn-3d" onClick={signOut}>Sign Out</button>
             </header>
 
             <main className="cloudly-main">
               <h1 className="section-title">Secure PDF Upload</h1>
-              <Appupload/>
+              <Appupload />
             </main>
           </>
         )}
