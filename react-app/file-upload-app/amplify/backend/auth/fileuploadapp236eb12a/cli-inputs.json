@@ -2,7 +2,7 @@
   "version": "1",
   "cognitoConfig": {
     "identityPoolName": "fileuploadapp236eb12a_identitypool_236eb12a",
-    "allowUnauthenticatedIdentities": true,
+    "allowUnauthenticatedIdentities": false,
     "resourceNameTruncated": "fileup236eb12a",
     "userPoolName": "fileuploadapp236eb12a_userpool_236eb12a",
     "autoVerifiedAttributes": [
@@ -36,7 +36,7 @@
     "sharedId": "236eb12a",
     "resourceName": "fileuploadapp236eb12a",
     "authSelections": "identityPoolAndUserPool",
-    "useDefault": "default",
+    "useDefault": "defaultSocial",
     "usernameAttributes": [
       "email"
     ],
@@ -57,6 +57,12 @@
       ]
     },
     "breakCircularDependency": true,
-    "dependsOn": []
+    "dependsOn": [],
+    "hostedUI": true,
+    "hostedUIDomainName": "cloudlyapp",
+    "authProvidersUserPool": [],
+    "hostedUIProviderMeta": "[]",
+    "oAuthMetadata": "{\"AllowedOAuthFlows\":[\"code\"],\"AllowedOAuthScopes\":[\"phone\",\"email\",\"openid\",\"profile\",\"aws.cognito.signin.user.admin\"],\"CallbackURLs\":[\"http://localhost:3000/\"],\"LogoutURLs\":[\"http://localhost:3000/\"]}",
+    "authProviders": []
   }
 }
