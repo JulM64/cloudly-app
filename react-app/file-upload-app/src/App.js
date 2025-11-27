@@ -12,7 +12,7 @@ function App() {
   return (
     <div className="App">
       <Authenticator>
-        {({ signOut }) => (
+        {({ signOut, user }) => (
           <>
             <header className="cloudly-header">
               <div className="logo">
@@ -27,7 +27,10 @@ function App() {
                 <a href="#messages">Messages</a>
               </nav>
 
-              <button className="btn-3d" onClick={signOut}>Sign Out</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <span>Welcome, {user?.username}</span>
+                <button className="btn-3d" onClick={signOut}>Sign Out</button>
+              </div>
             </header>
 
             <main className="cloudly-main">

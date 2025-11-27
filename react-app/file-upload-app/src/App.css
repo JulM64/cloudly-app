@@ -1,3 +1,276 @@
+/* Dashboard Styles */
+.dashboard-container {
+  text-align: left;
+  max-width: 1200px;
+}
+
+.page-container {
+  text-align: center;
+}
+
+.page-description {
+  color: var(--text);
+  opacity: 0.8;
+  margin-bottom: 30px;
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin: 30px 0;
+}
+
+.stat-card {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 25px;
+  border-radius: 15px;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.stat-card h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.stat-number {
+  font-size: 2em;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+/* User Info */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.user-role {
+  background: var(--accent);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+/* Activity and Files Lists */
+.activity-section,
+.files-section,
+.upload-section {
+  margin: 40px 0;
+}
+
+.activity-list,
+.files-list,
+.notifications-list,
+.messages-list {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+}
+
+.activity-item,
+.file-item,
+.notification-item,
+.message-item {
+  padding: 15px;
+  margin: 10px 0;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border-left: 4px solid var(--accent);
+}
+
+/* Buttons */
+.action-buttons,
+.admin-actions,
+.system-actions,
+.quick-actions {
+  display: flex;
+  gap: 15px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.btn-secondary:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-danger {
+  padding: 8px 16px;
+  border: 1px solid #ff4444;
+  background: transparent;
+  color: #ff4444;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-danger:hover {
+  background: #ff4444;
+  color: white;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin: 30px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.tab {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+
+.tab.active {
+  border-bottom: 3px solid var(--accent);
+  color: var(--accent);
+}
+
+.tab-content {
+  margin: 20px 0;
+}
+
+/* Notifications */
+.notification-item.info { border-left-color: #0066ff; }
+.notification-item.warning { border-left-color: #ffaa00; }
+.notification-item.success { border-left-color: #00cc66; }
+
+.notification-item.read {
+  opacity: 0.6;
+}
+
+.mark-read-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* Messages */
+.messages-layout {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 30px;
+  margin-top: 20px;
+}
+
+.message-item {
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.message-item:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.message-item.unread {
+  background: rgba(0, 102, 255, 0.1);
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.message-subject {
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+
+.message-preview {
+  opacity: 0.7;
+  font-size: 14px;
+}
+
+.message-detail {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 30px;
+  border-radius: 15px;
+  backdrop-filter: blur(10px);
+}
+
+/* Search Bar */
+.search-bar {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.search-bar input {
+  flex: 1;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+/* File Actions */
+.file-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.file-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .messages-layout {
+    grid-template-columns: 1fr;
+  }
+  
+  .action-buttons {
+    flex-direction: column;
+  }
+  
+  .user-info {
+    flex-direction: column;
+    gap: 10px;
+  }
+}
+
+
+
+
+
+
 /* === RESET === */
 :root {
   --bg: #ffffff;
