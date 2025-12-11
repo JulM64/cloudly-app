@@ -1,22 +1,17 @@
-# Cloudly App
+Cloudly App
 
 Secure PDF Upload Application with AWS Amplify
 
-[![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-Ready--to--Code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/YOUR_USERNAME/cloudly-app)
+Features
 
-## Features
-- Secure PDF upload
-- AWS Amplify authentication  
-- Responsive glass-morphism design
-- Cloud-based development environment
+Secure PDF upload
 
-## Getting Started
-Click the "Gitpod" button above to open this project in GitPod.
+AWS Amplify authentication
 
-The development server will start automatically and open at http://localhost:3000
+Responsive glass-morphism design
 
-## Technology Stack
-- React.js
-- AWS Amplify
-- AWS S3 Storage
-- AWS Cognito Authentication
+Cloud-based development environment
+
+Getting Started
+
+Click the "Run on Replit" button above to open this project directly in Replit.
