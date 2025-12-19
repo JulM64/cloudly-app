@@ -1,0 +1,11 @@
+{
+  "AppSyncApiName": "fileuploadapp",
+  "DynamoDBBillingMode": "PAY_PER_REQUEST",
+  "DynamoDBEnableServerSideEncryption": false,
+  "AuthCognitoUserPoolId": {
+    "Fn::GetAtt": [
+      "authfileuploadapp236eb12a",
+      "Outputs.UserPoolId"
+    ]
+  }
+}

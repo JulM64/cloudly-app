@@ -1,48 +1,85 @@
 import React, { useState } from 'react';
 import { uploadData } from '@aws-amplify/storage';
-import { getCurrentUser } from 'aws-amplify/auth';
 
-function Appupload() {
-  const [file, setFile] = useState(null);
+function Appupload({ userData }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
 
   const handleUpload = async (e) => {
     const chosenFile = e.target.files[0];
-    if (!chosenFile) return;
+    if (!chosenFile || !userData) return;
+
+    // Check file size (100MB max)
+    if (chosenFile.size > 104857600) {
+      setUploadStatus('File too large. Maximum size is 100MB ❌');
+      return;
+    }
+
+    setUploading(true);
+    setUploadStatus('Uploading...');
 
     try {
-      const user = await getCurrentUser();
+      const timestamp = Date.now();
+      const fileKey = `companies/${userData.companyId}/users/${userData.username}/${timestamp}-${chosenFile.name}`;
+      
+      // Upload to S3
       await uploadData({
-        key: `uploads/${user.username}/${chosenFile.name}`,
+        key: fileKey,
         data: chosenFile,
-        options: { contentType: chosenFile.type, accessLevel: 'public' },
-      });
-      alert('PDF uploaded 🎉');
+        options: { 
+          contentType: chosenFile.type,
+          accessLevel: 'private'
+        },
+      }).result;
+
+      setUploadStatus('File uploaded successfully! 🎉');
+      
     } catch (err) {
-      alert('Upload failed ❌');
+      console.error('Upload error:', err);
+      setUploadStatus('Upload failed ❌');
+    } finally {
+      setUploading(false);
     }
   };
 
   return (
-    <>
-      {/* animated clouds */}
-      <div className="cloud"></div>
-      <div className="cloud"></div>
-      <div className="cloud"></div>
+    <div className="upload-wrapper">
+      <h2>Scan & Upload PDF</h2>
+      
+      {userData && (
+        <div className="storage-indicator" style={{marginBottom: '20px'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '5px'}}>
+            <span>Storage: {(userData.storageUsed / 1024 / 1024).toFixed(2)} MB used</span>
+          </div>
+          <div className="storage-bar">
+            <div 
+              className="storage-fill" 
+              style={{ 
+                width: '0%', // Will update when real storage tracking is implemented
+                backgroundColor: '#0066ff'
+              }}
+            ></div>
+          </div>
+        </div>
+      )}
+      
+      <label className="btn-3d upload-label">
+        {uploading ? 'Uploading...' : '📁 Scan or Upload PDF'}
+        <input
+          type="file"
+          accept=".pdf,.doc,.docx,.jpg,.png"
+          onChange={handleUpload}
+          disabled={uploading || !userData}
+          style={{ display: 'none' }}
+        />
+      </label>
 
-      <div className="upload-wrapper">
-        <h2>Scan & Upload PDF</h2>
-        <label className="btn-3d upload-label">
-          Scan or Upload PDF
-          <input
-            type="file"
-            accept=".pdf"
-            capture="environment"
-            onChange={handleUpload}
-            style={{ display: 'none' }}
-          />
-        </label>
-      </div>
-    </>
+      {uploadStatus && (
+        <div className="upload-status">
+          {uploadStatus}
+        </div>
+      )}
+    </div>
   );
 }
 

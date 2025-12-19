@@ -1,0 +1,47 @@
+type User @model @auth(rules: [
+  {allow: owner, ownerField: "id"},
+  {allow: groups, groups: ["Admins"]},
+  {allow: private, operations: [read]}
+]) {
+  id: ID!
+  email: String! @index(name: "byEmail")
+  username: String!
+  companyId: ID! @index(name: "byCompany")
+  role: String! @default(value: "USER")
+  status: String! @default(value: "ACTIVE")
+  storageUsed: Int @default(value: 0)
+  createdAt: AWSDateTime!
+  updatedAt: AWSDateTime!
+}
+
+type Company @model @auth(rules: [
+  {allow: owner},
+  {allow: groups, groups: ["Admins"]},
+  {allow: private, operations: [read]}
+]) {
+  id: ID!
+  name: String!
+  slug: String! @index(name: "bySlug")
+  plan: String! @default(value: "FREE")
+  storageLimit: Int! @default(value: 2147483648)
+  createdAt: AWSDateTime!
+  updatedAt: AWSDateTime!
+}
+
+type File @model @auth(rules: [
+  {allow: owner},
+  {allow: groups, groups: ["Admins"]},
+  {allow: private, operations: [read]}
+]) {
+  id: ID!
+  name: String!
+  key: String!
+  size: Int!
+  type: String!
+  uploadedBy: ID! @index(name: "byUploader")
+  companyId: ID! @index(name: "byCompany")
+  isPublic: Boolean @default(value: false)
+  downloadCount: Int @default(value: 0)
+  createdAt: AWSDateTime!
+  updatedAt: AWSDateTime!
+}
