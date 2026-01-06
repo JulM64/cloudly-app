@@ -573,3 +573,122 @@ html, body {
 .recent-uploads::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 102, 255, 0.5);
 }
+
+
+/* App.css - Add these styles */
+
+/* Loading spinner animation */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Pulse animation */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+/* Button hover effects */
+.btn-3d {
+  position: relative;
+  transition: all 0.3s ease;
+  transform: translateY(0);
+}
+
+.btn-3d:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+}
+
+.btn-3d:active {
+  transform: translateY(1px);
+}
+
+/* Card hover effects */
+.hover-card {
+  transition: all 0.3s ease;
+  animation: fadeIn 0.5s ease-out;
+}
+
+.hover-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+
+/* Status animations */
+.status-active {
+  animation: pulse 2s infinite;
+}
+
+/* Modal animations */
+.modal-enter {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Cloud animations */
+.cloud {
+  animation-duration: 20s;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+/* Table row hover */
+.table-row {
+  transition: background-color 0.2s ease;
+}
+
+.table-row:hover {
+  background-color: rgba(0, 102, 255, 0.05) !important;
+}
+
+/* Progress bar animation */
+@keyframes progress {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 0%; }
+}
+
+.progress-bar-animated {
+  background: linear-gradient(90deg, #0066ff, #00cc66, #0066ff);
+  background-size: 200% 100%;
+  animation: progress 2s linear infinite;
+}
+
+/* Notification badge animation */
+@keyframes bounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.notification-badge {
+  animation: bounce 2s infinite;
+}
+
+/* In App.css */
+.upload-wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 20px;
+  transition: max-width 0.3s ease;
+}
+
+@media (min-width: 1400px) {
+  .upload-wrapper {
+    max-width: 1400px;
+  }
+}
+
+@media (max-width: 768px) {
+  .upload-wrapper {
+    max-width: 100%;
+    padding: 0 15px;
+  }
+}

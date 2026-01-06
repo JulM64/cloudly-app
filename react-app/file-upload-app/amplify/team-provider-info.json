@@ -17,9 +17,6 @@
       },
       "storage": {
         "userfiles": {}
-      },
-      "api": {
-        "fileuploadapp": {}
       }
     }
   }
