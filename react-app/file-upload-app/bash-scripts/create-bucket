@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+echo "create-bucket"
+if [ -z "$1" ]; then
+    echo "there needs to be a bucket name e.g. ./bucket my bucket-name"
+    exit 1
+fi
+
+BUCKET_NAME=$1
+REGION=${2:-us-east-1} # Région par défaut : us-east-1
+echo "aws s3api create-bucket --bucket $BUCKET_NAME"
+aws s3api create-bucket \
+--bucket $BUCKET_NAME

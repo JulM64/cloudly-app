@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+echo "List of buckets"
+echo "..."
+aws s3api list-buckets | jq -r '.Buckets | sort_by(.CreationDate) | reverse | .[] | .Name' 
+#if you want to list top 5 of buckets sort by creation date
+#aws s3api list-buckets | jq -r '.Buckets | sort_by(.CreationDate) | reverse | .[0:5] | | .[] |  .Name' 
+echo "..."

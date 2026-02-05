@@ -1,7 +1,11 @@
-// src/App.js - COMPLETE VERSION WITH PROPER ADMIN ACCESS
+// src/App.js - COMPLETE VERSION WITH AWS COGNITO INTEGRATION
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import './App.css';
+
+// Import Cognito and S3 services
+import cognitoService from './services/cognitoService';
+import s3Service from './services/s3Service';
 
 // Import components
 import Navigation from './components/Navigation';
@@ -14,79 +18,100 @@ import DepartmentPage from './pages/DepartmentPage';
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [newPasswordRequired, setNewPasswordRequired] = useState(false);
+  const [pendingCognitoUser, setPendingCognitoUser] = useState(null);
 
-  // Check localStorage for saved user
+  // Check localStorage for saved user and validate session
   useEffect(() => {
-    const savedUser = localStorage.getItem('cloudly_user');
-    if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
-    }
-  }, []);
-
-  const handleSignOut = () => {
-    localStorage.removeItem('cloudly_user');
-    setCurrentUser(null);
-    setMessage('✅ Signed out successfully');
-  };
-
-  const handleLogin = async (email, password) => {
-    setLoading(true);
-    setMessage('');
-
-    // Mock authentication with DIFFERENT ROLES
-    const mockUsers = {
-      'admin@cloudly.com': {
-        password: 'Admin123!',
-        firstName: 'Admin',
-        role: 'SUPER_ADMIN', // Only this user is admin
-        initials: 'AU',
-        color: '#9c27b0'
-      },
-      'user@cloudly.com': {
-        password: 'User123!',
-        firstName: 'Regular',
-        role: 'USER', // Regular user
-        initials: 'RU',
-        color: '#4caf50'
-      },
-      'demo@cloudly.com': {
-        password: 'Demo123!',
-        firstName: 'Demo',
-        role: 'USER', // Regular user
-        initials: 'DU',
-        color: '#ff9800'
-      },
-      'manager@cloudly.com': {
-        password: 'Manager123!',
-        firstName: 'Manager',
-        role: 'TEAM_MANAGER', // Manager but not admin
-        initials: 'MU',
-        color: '#2196f3'
+    const initAuth = async () => {
+      const savedUser = localStorage.getItem('cloudly_user');
+      if (savedUser) {
+        try {
+          const userData = JSON.parse(savedUser);
+          
+          // Verify session is still valid
+          const currentUser = await cognitoService.getCurrentUser();
+          
+          // Initialize S3 with user's token
+          if (userData.idToken) {
+            await s3Service.initialize(userData.idToken);
+          }
+          
+          setCurrentUser(userData);
+          console.log('✅ User session restored:', userData.email);
+        } catch (error) {
+          console.error('Session validation failed:', error);
+          localStorage.removeItem('cloudly_user');
+          setCurrentUser(null);
+        }
       }
+      setLoading(false);
     };
 
-    const user = mockUsers[email];
-    
-    if (user && user.password === password) {
-      const userData = {
-        email: email,
-        firstName: user.firstName,
-        role: user.role,
-        initials: user.initials,
-        color: user.color
-      };
+    initAuth();
+  }, []);
+
+  // Handle Sign Out
+  const handleSignOut = () => {
+    cognitoService.signOut();
+    setCurrentUser(null);
+    setMessage('✅ Signed out successfully');
+    setTimeout(() => setMessage(''), 3000);
+  };
+
+  // Handle Login Success
+  const handleLoginSuccess = async (userData) => {
+    try {
+      // Initialize S3 service with user's ID token
+      await s3Service.initialize(userData.idToken);
       
-      localStorage.setItem('cloudly_user', JSON.stringify(userData));
       setCurrentUser(userData);
       setMessage('✅ Login successful!');
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Error initializing S3:', error);
+      setMessage('⚠️ Login successful but S3 initialization failed');
+      setCurrentUser(userData);
+    }
+  };
+
+  // Handle New Password Required
+  const handleNewPasswordRequired = (cognitoUser, userAttributes) => {
+    setNewPasswordRequired(true);
+    setPendingCognitoUser({ cognitoUser, userAttributes });
+    setMessage('⚠️ Please set a new password to continue');
+  };
+
+  // Complete New Password Challenge
+  const handleCompleteNewPassword = async (newPassword) => {
+    if (!pendingCognitoUser) {
+      setMessage('❌ No pending password change');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const userData = await cognitoService.completeNewPassword(
+        pendingCognitoUser.cognitoUser,
+        newPassword,
+        pendingCognitoUser.userAttributes
+      );
+
+      // Initialize S3
+      await s3Service.initialize(userData.idToken);
+
+      setCurrentUser(userData);
+      setNewPasswordRequired(false);
+      setPendingCognitoUser(null);
+      setMessage('✅ Password changed successfully!');
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Password change error:', error);
+      setMessage(`❌ ${error.message || 'Failed to change password'}`);
+    } finally {
       setLoading(false);
-      return { success: true };
-    } else {
-      setMessage('❌ Invalid email or password');
-      setLoading(false);
-      return { success: false, error: 'Invalid credentials' };
     }
   };
 
@@ -154,6 +179,7 @@ function App() {
     // Check if user is SUPER_ADMIN
     if (currentUser.role !== 'SUPER_ADMIN') {
       setMessage('❌ Access denied. Admin privileges required.');
+      setTimeout(() => setMessage(''), 5000);
       return <Navigate to="/" replace />;
     }
     
@@ -188,6 +214,14 @@ function App() {
     createClouds();
   }, []);
 
+  // Auto-hide messages after 5 seconds
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => setMessage(''), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
   return (
     <Router>
       <div className="App">
@@ -197,28 +231,103 @@ function App() {
           {message && (
             <div className="message-banner" style={{
               padding: '15px',
-              backgroundColor: message.includes('✅') ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)',
-              border: `1px solid ${message.includes('✅') ? '#4CAF50' : '#f44336'}`,
+              backgroundColor: message.includes('✅') ? 'rgba(76, 175, 80, 0.1)' : 
+                             message.includes('⚠️') ? 'rgba(255, 152, 0, 0.1)' :
+                             'rgba(244, 67, 54, 0.1)',
+              border: `1px solid ${message.includes('✅') ? '#4CAF50' : 
+                                  message.includes('⚠️') ? '#ff9800' :
+                                  '#f44336'}`,
               borderRadius: '10px',
               marginBottom: '20px',
-              color: message.includes('✅') ? '#4CAF50' : '#f44336',
+              color: message.includes('✅') ? '#4CAF50' : 
+                     message.includes('⚠️') ? '#ff9800' :
+                     '#f44336',
               maxWidth: '1200px',
               margin: '0 auto 20px auto',
-              animation: 'fadeIn 0.5s ease-out'
+              animation: 'fadeIn 0.5s ease-out',
+              textAlign: 'center',
+              fontWeight: '500'
             }}>
               {message}
+            </div>
+          )}
+          
+          {/* New Password Required Modal */}
+          {newPasswordRequired && (
+            <div style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999
+            }}>
+              <div className="page-card" style={{
+                maxWidth: '500px',
+                padding: '40px',
+                backgroundColor: 'white',
+                borderRadius: '12px',
+                boxShadow: '0 10px 40px rgba(0, 0, 0, 0.2)'
+              }}>
+                <h2 style={{ marginBottom: '20px', color: '#333' }}>🔑 Set New Password</h2>
+                <p style={{ marginBottom: '30px', color: '#666' }}>
+                  For security reasons, please set a new password before continuing.
+                </p>
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const newPassword = e.target.newPassword.value;
+                  handleCompleteNewPassword(newPassword);
+                }}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', color: '#555', fontWeight: '500' }}>
+                      New Password
+                    </label>
+                    <input
+                      type="password"
+                      name="newPassword"
+                      placeholder="Min 8 characters, include uppercase, number & symbol"
+                      required
+                      minLength={8}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '1px solid #ddd',
+                        borderRadius: '8px',
+                        fontSize: '15px'
+                      }}
+                      className="hover-card"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-3d"
+                    style={{ width: '100%', padding: '14px', fontSize: '16px' }}
+                  >
+                    {loading ? '⏳ Updating...' : '🔑 Set New Password'}
+                  </button>
+                </form>
+              </div>
             </div>
           )}
           
           <Routes>
             <Route path="/login" element={
               currentUser ? <Navigate to="/" replace /> : 
-              <LoginPage login={handleLogin} loading={loading} />
+              <LoginPage 
+                onLoginSuccess={handleLoginSuccess}
+                onNewPasswordRequired={handleNewPasswordRequired}
+                setMessage={setMessage}
+              />
             } />
             
             <Route path="/" element={
               <ProtectedRoute>
-                <HomePage user={currentUser} />
+                <HomePage user={currentUser} setMessage={setMessage} />
               </ProtectedRoute>
             } />
             
@@ -230,14 +339,14 @@ function App() {
             
             <Route path="/settings" element={
               <ProtectedRoute>
-                <SettingsPage user={currentUser} />
+                <SettingsPage user={currentUser} setMessage={setMessage} />
               </ProtectedRoute>
             } />
             
             {/* Departments page - ADMIN ONLY */}
             <Route path="/departments" element={
               <AdminProtectedRoute>
-                <DepartmentPage />
+                <DepartmentPage setMessage={setMessage} />
               </AdminProtectedRoute>
             } />
             
@@ -252,7 +361,7 @@ function App() {
         
         {/* Footer */}
         <footer style={{
-          padding: '20px',
+          padding: '0px',
           backgroundColor: '#f8f9fa',
           borderTop: '1px solid #e0e0e0',
           textAlign: 'center',
@@ -261,10 +370,15 @@ function App() {
           position: 'relative',
           zIndex: '100'
         }}>
-          <p>© 2024 Cloudly. All rights reserved.</p>
+          <p>© 2026 Cloudly. All rights reserved.</p>
           <p style={{ fontSize: '14px', opacity: 0.7 }}>
-            Department Management System • Role-based access control enabled
+            AWS Cognito Authentication • S3 Cloud Storage • Department-based Access Control
           </p>
+          {currentUser && (
+            <p style={{ fontSize: '12px', opacity: 0.25, marginTop: '0px' }}>
+              Logged in as: {currentUser.email} • Role: {currentUser.role} • Department: {currentUser.department}
+            </p>
+          )}
         </footer>
       </div>
     </Router>
