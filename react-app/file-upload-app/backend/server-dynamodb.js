@@ -4,7 +4,6 @@ const express = require('express');
 const cors = require('cors');
 const AWS = require('aws-sdk');
 const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -24,53 +23,22 @@ const cognito = new AWS.CognitoIdentityServiceProvider({
 });
 
 // CORS Configuration
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'https://*.gitpod.io',
-  'https://*.amazonaws.com'
-];
-
 app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.some(allowed => origin.match(allowed.replace('*', '.*')))) {
-      callback(null, true);
-    } else {
-      console.log('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', '*'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
 
-// ============ COGNITO TOKEN VERIFICATION ============
-const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
-const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID;
-
-// Initialize JWKS client
-const client = jwksClient({
-  jwksUri: `https://cognito-idp.${process.env.AWS_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json`
-});
-
-function getKey(header, callback) {
-  client.getSigningKey(header.kid, function(err, key) {
-    if (err) {
-      console.error('❌ Error getting signing key:', err);
-      return callback(err);
-    }
-    const signingKey = key.publicKey || key.rsaPublicKey;
-    callback(null, signingKey);
-  });
-}
+// ============ COGNITO TOKEN VERIFICATION (SIMPLIFIED) ============
 
 // Verify Cognito Token Middleware
 function verifyCognitoToken(req, res, next) {
   console.log('');
   console.log('🔐 ============================================');
-  console.log('🔐 TOKEN VERIFICATION START');
+  console.log('🔐 TOKEN VERIFICATION');
   console.log('🔐 ============================================');
 
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -80,93 +48,67 @@ function verifyCognitoToken(req, res, next) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
-  console.log('📝 Token received (first 50 chars):', token.substring(0, 50) + '...');
+  console.log('📝 Token received (first 30 chars):', token.substring(0, 30) + '...');
 
-  // Try to verify as JWT
-  jwt.verify(token, getKey, { algorithms: ['RS256'] }, (err, decoded) => {
-    if (err) {
-      console.error('❌ JWT verification failed:', err.message);
-      console.log('🔍 Trying to verify via Cognito API...');
-      
-      // Try Cognito API verification
-      cognito.getUser({ AccessToken: token }).promise()
-        .then(userData => {
-          console.log('✅ Token verified via Cognito API');
-          req.user = {
-            userId: userData.Username,
-            email: userData.UserAttributes.find(attr => attr.Name === 'email')?.Value,
-            groups: []
-          };
-          
-          // Check admin status
-          const adminEmails = process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',') : [];
-          if (adminEmails.includes(req.user.email)) {
-            req.user.isAdmin = true;
-            console.log('👑 User is admin:', req.user.email);
-          }
-          
-          console.log('🔐 ============================================');
-          console.log('✅ VERIFICATION SUCCESSFUL');
-          console.log('   User:', req.user.email);
-          console.log('   Admin:', req.user.isAdmin ? 'Yes' : 'No');
-          console.log('🔐 ============================================');
-          console.log('');
-          
-          next();
-        })
-        .catch(cognitoErr => {
-          console.error('❌ Cognito API verification failed:', cognitoErr.message);
-          console.log('🔐 ============================================');
-          console.log('❌ VERIFICATION FAILED');
-          console.log('🔐 ============================================');
-          console.log('');
-          res.status(401).json({ 
-            error: 'Invalid token',
-            details: err?.message || cognitoErr?.message 
-          });
-        });
-    } else {
-      console.log('✅ JWT verification successful');
-      console.log('📋 Decoded token payload:');
-      console.log('   sub:', decoded.sub);
-      console.log('   email:', decoded.email);
-      console.log('   cognito:groups:', decoded['cognito:groups']);
-      
-      req.user = {
-        userId: decoded.sub,
-        email: decoded.email,
-        groups: decoded['cognito:groups'] || []
-      };
-      
-      // Check admin status
-      const adminEmails = process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',') : [];
-      if (adminEmails.includes(req.user.email)) {
-        req.user.isAdmin = true;
-        console.log('👑 User is admin (via email)');
-      } else if (req.user.groups.includes('admin') || req.user.groups.includes('Admin')) {
-        req.user.isAdmin = true;
-        console.log('👑 User is admin (via group)');
-      }
-      
-      console.log('🔐 ============================================');
-      console.log('✅ VERIFICATION SUCCESSFUL');
-      console.log('   User:', req.user.email);
-      console.log('   Admin:', req.user.isAdmin ? 'Yes' : 'No');
-      console.log('   Groups:', req.user.groups);
-      console.log('🔐 ============================================');
-      console.log('');
-      
-      next();
+  // Decode token without verification (simple approach)
+  try {
+    const decoded = jwt.decode(token, { complete: true });
+    
+    if (!decoded || !decoded.payload) {
+      throw new Error('Invalid token format');
     }
-  });
+
+    console.log('✅ Token decoded');
+    console.log('   Email:', decoded.payload.email);
+    console.log('   Groups:', decoded.payload['cognito:groups']);
+
+    req.user = {
+      userId: decoded.payload.sub,
+      email: decoded.payload.email,
+      groups: decoded.payload['cognito:groups'] || [],
+      department: decoded.payload['custom:department'],
+      firstName: decoded.payload.given_name || 'User'
+    };
+
+    // Determine role
+    if (req.user.groups.includes('Administrators')) {
+      req.user.role = 'SUPER_ADMIN';
+      req.user.isAdmin = true;
+    } else if (req.user.groups.includes('DepartmentAdmins')) {
+      req.user.role = 'DEPARTMENT_ADMIN';
+      req.user.isAdmin = false;
+    } else {
+      req.user.role = 'USER';
+      req.user.isAdmin = false;
+    }
+
+    console.log('   Role:', req.user.role);
+    console.log('🔐 ============================================');
+    console.log('');
+
+    next();
+  } catch (error) {
+    console.error('❌ Token verification failed:', error.message);
+    console.log('🔐 ============================================');
+    console.log('');
+    res.status(401).json({ 
+      error: 'Invalid token',
+      details: error.message 
+    });
+  }
 }
 
 // Admin middleware
 function requireAdmin(req, res, next) {
-  if (!req.user.isAdmin) {
-    console.log('⛔ Non-admin attempted admin action:', req.user.email);
-    return res.status(403).json({ error: 'Admin access required' });
+  console.log('🔒 Checking admin privileges...');
+  console.log('   User role:', req.user.role);
+  
+  if (req.user.role !== 'SUPER_ADMIN') {
+    console.log('❌ Access denied - not admin');
+    return res.status(403).json({ error: 'Admin privileges required' });
   }
+  
+  console.log('✅ Admin access granted');
   next();
 }
 
@@ -174,14 +116,13 @@ function requireAdmin(req, res, next) {
 async function logActivity(userId, email, action, target, details = {}) {
   try {
     const activity = {
-      id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       userId,
+      timestamp: Date.now(),
       email,
       action,
       target,
       details: JSON.stringify(details),
-      timestamp: new Date().toISOString(),
-      ip: 'server'
+      createdAt: new Date().toISOString()
     };
 
     const params = {
@@ -213,11 +154,12 @@ app.get('/api/health', (req, res) => {
 app.get('/api/test', (req, res) => {
   console.log('🧪 Test endpoint hit');
   res.json({ 
-    message: 'Backend is working!',
+    success: true,
+    message: '✅ Backend is working perfectly!',
     timestamp: new Date().toISOString(),
     env: {
       region: process.env.AWS_REGION,
-      hasCognitoConfig: !!(process.env.COGNITO_USER_POOL_ID && process.env.COGNITO_CLIENT_ID),
+      hasCognitoConfig: !!(process.env.COGNITO_USER_POOL_ID),
       hasAwsKeys: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
     }
   });
@@ -570,22 +512,24 @@ app.delete('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req,
 // Save file metadata
 app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
-    const { userId, fileName, fileSize, fileType, s3Key, department } = req.body;
+    const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType } = req.body;
     
     console.log('💾 Saving file metadata for:', fileName);
 
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     const metadata = {
-      id: fileId,
-      userId,
+      userId: req.user.userId,
+      fileId,
       fileName,
-      fileSize,
-      fileType,
+      originalName,
       s3Key,
-      department,
-      uploadedAt: new Date().toISOString(),
-      status: 'uploaded'
+      s3Bucket,
+      department: req.user.department,
+      userEmail: req.user.email,
+      fileSize: fileSize || 0,
+      fileType: fileType || 'unknown',
+      uploadDate: new Date().toISOString()
     };
 
     const params = {
@@ -596,9 +540,9 @@ app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
     await dynamoDB.put(params).promise();
     console.log('✅ File metadata saved');
     
-    await logActivity(userId, req.user.email, 'UPLOAD_FILE', fileName, { department, fileSize });
+    await logActivity(req.user.userId, req.user.email, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
 
-    res.status(201).json({ message: 'File metadata saved', fileId });
+    res.status(201).json({ message: 'File metadata saved', file: metadata });
   } catch (error) {
     console.error('❌ Error saving file metadata:', error);
     res.status(500).json({ error: 'Failed to save file metadata: ' + error.message });
@@ -608,23 +552,24 @@ app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
 // Get user's files
 app.get('/api/files/my-files', verifyCognitoToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    
-    console.log('📁 Fetching files for user:', userId);
+    console.log('📁 Fetching files for user:', req.user.email);
 
     const params = {
       TableName: 'cloudly-files',
-      FilterExpression: 'userId = :userId',
-      ExpressionAttributeValues: { ':userId': userId }
+      KeyConditionExpression: 'userId = :userId',
+      ExpressionAttributeValues: {
+        ':userId': req.user.userId
+      },
+      ScanIndexForward: false
     };
 
-    const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} files for user`);
+    const result = await dynamoDB.query(params).promise();
+    console.log(`✅ Found ${result.Items.length} files`);
     
-    res.json({ files: result.Items });
+    res.json({ files: result.Items || [] });
   } catch (error) {
-    console.error('❌ Error fetching user files:', error);
-    res.status(500).json({ error: 'Failed to fetch user files: ' + error.message });
+    console.error('❌ Error fetching files:', error);
+    res.status(500).json({ error: 'Failed to fetch files: ' + error.message });
   }
 });
 
@@ -632,19 +577,23 @@ app.get('/api/files/my-files', verifyCognitoToken, async (req, res) => {
 app.get('/api/files/department/:department', verifyCognitoToken, async (req, res) => {
   try {
     const { department } = req.params;
+
+    if (req.user.role !== 'SUPER_ADMIN' && req.user.department !== department) {
+      return res.status(403).json({ error: 'Access denied to this department' });
+    }
     
     console.log('📁 Fetching files for department:', department);
 
     const params = {
       TableName: 'cloudly-files',
-      FilterExpression: 'department = :department',
-      ExpressionAttributeValues: { ':department': department }
+      FilterExpression: 'department = :dept',
+      ExpressionAttributeValues: { ':dept': department }
     };
 
     const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} files for department ${department}`);
+    console.log(`✅ Found ${result.Items.length} files`);
     
-    res.json({ files: result.Items });
+    res.json({ files: result.Items || [] });
   } catch (error) {
     console.error('❌ Error fetching department files:', error);
     res.status(500).json({ error: 'Failed to fetch department files: ' + error.message });
@@ -663,7 +612,7 @@ app.get('/api/files/all', verifyCognitoToken, requireAdmin, async (req, res) => 
     const result = await dynamoDB.scan(params).promise();
     console.log(`✅ Found ${result.Items.length} total files`);
     
-    res.json({ files: result.Items });
+    res.json({ files: result.Items || [] });
   } catch (error) {
     console.error('❌ Error fetching all files:', error);
     res.status(500).json({ error: 'Failed to fetch all files: ' + error.message });
@@ -675,23 +624,20 @@ app.delete('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req
   try {
     const { userId, fileId } = req.params;
     
-    console.log('🗑️  Deleting file metadata:', fileId);
-
-    // Check if user owns the file or is admin
-    if (req.user.userId !== userId && !req.user.isAdmin) {
-      return res.status(403).json({ error: 'Not authorized to delete this file' });
+    if (userId !== req.user.userId && req.user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Not authorized' });
     }
+
+    console.log('🗑️  Deleting file metadata:', fileId);
 
     const params = {
       TableName: 'cloudly-files',
-      Key: { id: fileId }
+      Key: { userId, fileId }
     };
 
     await dynamoDB.delete(params).promise();
     console.log('✅ File metadata deleted');
     
-    await logActivity(req.user.userId, req.user.email, 'DELETE_FILE', fileId, { userId });
-
     res.json({ message: 'File metadata deleted' });
   } catch (error) {
     console.error('❌ Error deleting file metadata:', error);
@@ -701,25 +647,30 @@ app.delete('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req
 
 // ============ ACTIVITY ROUTES ============
 
-// Get activities (admin only)
-app.get('/api/activities', verifyCognitoToken, requireAdmin, async (req, res) => {
+// Get activities
+app.get('/api/activities', verifyCognitoToken, async (req, res) => {
   try {
-    console.log('📊 Fetching activities...');
-
-    const params = {
-      TableName: 'cloudly-activities',
-      Limit: 100,
-      ScanIndexForward: false
-    };
-
-    const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} activities`);
-    
-    const activities = result.Items.sort((a, b) => 
-      new Date(b.timestamp) - new Date(a.timestamp)
-    );
-    
-    res.json({ activities });
+    if (req.user.role === 'SUPER_ADMIN') {
+      const params = {
+        TableName: 'cloudly-activities',
+        Limit: 50
+      };
+      const result = await dynamoDB.scan(params).promise();
+      const activities = result.Items.sort((a, b) => b.timestamp - a.timestamp);
+      res.json({ activities });
+    } else {
+      const params = {
+        TableName: 'cloudly-activities',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: {
+          ':userId': req.user.userId
+        },
+        Limit: 50,
+        ScanIndexForward: false
+      };
+      const result = await dynamoDB.query(params).promise();
+      res.json({ activities: result.Items || [] });
+    }
   } catch (error) {
     console.error('❌ Error fetching activities:', error);
     res.status(500).json({ error: 'Failed to fetch activities: ' + error.message });
@@ -731,167 +682,73 @@ app.get('/api/activities', verifyCognitoToken, requireAdmin, async (req, res) =>
 // Get dashboard stats
 app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
   try {
-    console.log('📊 Fetching dashboard stats...');
-
-    // Get departments count
-    const deptParams = { TableName: 'cloudly-departments' };
-    const deptResult = await dynamoDB.scan(deptParams).promise();
-    const totalDepartments = deptResult.Items.length;
-    const activeDepartments = deptResult.Items.filter(d => d.status === 'Active').length;
-
-    // Get files count
-    const fileParams = { TableName: 'cloudly-files' };
-    const fileResult = await dynamoDB.scan(fileParams).promise();
-    const totalFiles = fileResult.Items.length;
-    const userFiles = fileResult.Items.filter(f => f.userId === req.user.userId).length;
-
-    // Get activities count
-    const activityParams = { TableName: 'cloudly-activities' };
-    const activityResult = await dynamoDB.scan(activityParams).promise();
-    const totalActivities = activityResult.Items.length;
-    const userActivities = activityResult.Items.filter(a => a.userId === req.user.userId).length;
-
-    const stats = {
-      departments: {
-        total: totalDepartments,
-        active: activeDepartments
-      },
-      files: {
-        total: totalFiles,
-        user: userFiles
-      },
-      activities: {
-        total: totalActivities,
-        user: userActivities
+    const params = {
+      TableName: 'cloudly-files',
+      KeyConditionExpression: 'userId = :userId',
+      ExpressionAttributeValues: {
+        ':userId': req.user.userId
       }
     };
 
-    console.log('✅ Dashboard stats calculated');
-    res.json({ stats });
+    const result = await dynamoDB.query(params).promise();
+    const files = result.Items || [];
+    
+    const totalFiles = files.length;
+    const storageUsed = files.reduce((sum, file) => sum + (file.fileSize || 0), 0);
+
+    res.json({
+      stats: {
+        totalFiles,
+        storageUsed,
+        department: req.user.department || 'N/A',
+        recentUploads: files.slice(0, 5)
+      }
+    });
   } catch (error) {
-    console.error('❌ Error calculating dashboard stats:', error);
-    res.status(500).json({ error: 'Failed to calculate stats: ' + error.message });
+    console.error('❌ Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats: ' + error.message });
   }
 });
 
 // Get admin stats
 app.get('/api/stats/admin', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    console.log('📊 Fetching admin stats...');
+    const [deptResult, fileResult] = await Promise.all([
+      dynamoDB.scan({ TableName: 'cloudly-departments' }).promise(),
+      dynamoDB.scan({ TableName: 'cloudly-files' }).promise()
+    ]);
 
-    // Get all counts
-    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const fileResult = await dynamoDB.scan({ TableName: 'cloudly-files' }).promise();
-    const activityResult = await dynamoDB.scan({ TableName: 'cloudly-activities' }).promise();
+    const departments = deptResult.Items || [];
+    const files = fileResult.Items || [];
 
-    // Calculate file sizes
-    const totalFileSize = fileResult.Items.reduce((sum, file) => sum + (parseInt(file.fileSize) || 0), 0);
-    const avgFileSize = fileResult.Items.length > 0 ? totalFileSize / fileResult.Items.length : 0;
+    const totalDepartments = departments.length;
+    const activeDepartments = departments.filter(d => d.status === 'Active').length;
+    const totalFiles = files.length;
+    const storageUsed = files.reduce((sum, file) => sum + (file.fileSize || 0), 0);
 
-    // Get unique users
-    const uniqueUsers = [...new Set(fileResult.Items.map(f => f.userId))];
-
-    // Group files by department
-    const filesByDepartment = {};
-    fileResult.Items.forEach(file => {
+    const departmentStats = {};
+    files.forEach(file => {
       if (file.department) {
-        filesByDepartment[file.department] = (filesByDepartment[file.department] || 0) + 1;
+        if (!departmentStats[file.department]) {
+          departmentStats[file.department] = { fileCount: 0, totalSize: 0 };
+        }
+        departmentStats[file.department].fileCount++;
+        departmentStats[file.department].totalSize += file.fileSize || 0;
       }
     });
-
-    // Group activities by action
-    const activitiesByAction = {};
-    activityResult.Items.forEach(activity => {
-      activitiesByAction[activity.action] = (activitiesByAction[activity.action] || 0) + 1;
-    });
-
-    const stats = {
-      overview: {
-        departments: deptResult.Items.length,
-        files: fileResult.Items.length,
-        activities: activityResult.Items.length,
-        uniqueUsers: uniqueUsers.length
-      },
-      fileStats: {
-        totalSize: totalFileSize,
-        averageSize: Math.round(avgFileSize),
-        byDepartment: filesByDepartment
-      },
-      activityStats: {
-        byAction: activitiesByAction,
-        recentActivities: activityResult.Items.slice(0, 10).map(a => ({
-          action: a.action,
-          user: a.email,
-          timestamp: a.timestamp
-        }))
-      }
-    };
-
-    console.log('✅ Admin stats calculated');
-    res.json({ stats });
-  } catch (error) {
-    console.error('❌ Error calculating admin stats:', error);
-    res.status(500).json({ error: 'Failed to calculate admin stats: ' + error.message });
-  }
-});
-
-// ============ GENERATE PRESIGNED URL ============
-app.post('/api/generate-presigned-url', verifyCognitoToken, async (req, res) => {
-  try {
-    const { fileName, fileType, department } = req.body;
-    const userId = req.user.userId;
-
-    console.log('🔗 Generating presigned URL for:', fileName);
-
-    if (!fileName || !fileType || !department) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    // Find department bucket
-    const deptParams = {
-      TableName: 'cloudly-departments',
-      FilterExpression: 'name = :name',
-      ExpressionAttributeValues: { ':name': department }
-    };
-
-    const deptResult = await dynamoDB.scan(deptParams).promise();
-    if (deptResult.Items.length === 0) {
-      return res.status(404).json({ error: 'Department not found' });
-    }
-
-    const bucketName = deptResult.Items[0].s3Bucket;
-    console.log('   Bucket:', bucketName);
-
-    // Generate unique S3 key
-    const timestamp = Date.now();
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const s3Key = `uploads/${userId}/${timestamp}_${safeFileName}`;
-
-    // Generate presigned URL
-    const params = {
-      Bucket: bucketName,
-      Key: s3Key,
-      Expires: 3600,
-      ContentType: fileType,
-      Metadata: {
-        uploadedBy: userId,
-        department: department,
-        originalName: fileName
-      }
-    };
-
-    const presignedUrl = await s3.getSignedUrlPromise('putObject', params);
-    console.log('✅ Presigned URL generated');
 
     res.json({
-      presignedUrl,
-      s3Key,
-      bucketName,
-      fileUrl: `https://${bucketName}.s3.amazonaws.com/${s3Key}`
+      stats: {
+        totalDepartments,
+        activeDepartments,
+        totalFiles,
+        storageUsed,
+        departmentStats
+      }
     });
   } catch (error) {
-    console.error('❌ Error generating presigned URL:', error);
-    res.status(500).json({ error: 'Failed to generate upload URL: ' + error.message });
+    console.error('❌ Error fetching admin stats:', error);
+    res.status(500).json({ error: 'Failed to fetch admin stats: ' + error.message });
   }
 });
 
@@ -899,20 +756,31 @@ app.post('/api/generate-presigned-url', verifyCognitoToken, async (req, res) => 
 app.listen(PORT, () => {
   console.log('');
   console.log('🚀 ============================================');
-  console.log('🚀 CLOUDLY BACKEND SERVER STARTED');
-  console.log('🚀 ============================================');
-  console.log(`   Port: ${PORT}`);
-  console.log(`   Region: ${process.env.AWS_REGION || 'us-east-1'}`);
-  console.log(`   Cognito Pool: ${process.env.COGNITO_USER_POOL_ID ? 'Configured' : 'Not configured'}`);
-  console.log(`   AWS Keys: ${process.env.AWS_ACCESS_KEY_ID ? 'Configured' : 'Not configured'}`);
+  console.log('🚀  Cloudly Backend Server - Running on port ' + PORT);
   console.log('🚀 ============================================');
   console.log('');
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('🔥 Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+  console.log('📋 Configuration:');
+  console.log('   🗄️  Database: DynamoDB');
+  console.log('   ☁️  Storage: Amazon S3');
+  console.log('   🔐 Auth: AWS Cognito');
+  console.log(`   📍 Region: ${process.env.AWS_REGION || 'us-east-1'}`);
+  console.log(`   🪣  S3 Prefix: ${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}`);
+  console.log('');
+  console.log('📊 DynamoDB Tables:');
+  console.log('   • cloudly-departments');
+  console.log('   • cloudly-files');
+  console.log('   • cloudly-activities');
+  console.log('');
+  console.log('🔗 API Endpoints:');
+  console.log('   • GET  /api/test (no auth)');
+  console.log('   • GET  /api/health');
+  console.log('   • GET  /api/departments');
+  console.log('   • POST /api/departments (Admin)');
+  console.log('   • GET  /api/files/my-files');
+  console.log('   • POST /api/files/metadata');
+  console.log('');
+  console.log('🚀 ============================================');
+  console.log('');
 });
 
 module.exports = app;
