@@ -22,15 +22,26 @@ const cognito = new AWS.CognitoIdentityServiceProvider({
   region: process.env.AWS_REGION || 'us-east-1'
 });
 
-// CORS Configuration
-app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', '*'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// ============ CORS CONFIGURATION (FIXED FOR CODESPACES) ============
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 app.use(express.json());
+
+// Handle preflight for Codespaces
+app.options('*', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.status(204).send('');
+});
 
 // ============ COGNITO TOKEN VERIFICATION (SIMPLIFIED) ============
 
@@ -163,6 +174,39 @@ app.get('/api/test', (req, res) => {
       hasAwsKeys: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
     }
   });
+});
+
+// ============ USERS ROUTE (for Members modal) ============
+
+// Get all Cognito users (Admin only)
+app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    console.log('👥 Fetching Cognito users...');
+
+    const params = {
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Limit: 60
+    };
+
+    const result = await cognito.listUsers(params).promise();
+
+    const users = (result.Users || []).map(u => {
+      const attr = (name) => (u.Attributes || []).find(a => a.Name === name)?.Value || '';
+      return {
+        email: attr('email'),
+        name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
+        department: attr('custom:department'),
+        status: u.UserStatus,
+        groups: []
+      };
+    });
+
+    console.log(`✅ Found ${users.length} users`);
+    res.json({ users });
+  } catch (error) {
+    console.error('❌ Error fetching users:', error);
+    res.status(500).json({ error: 'Failed to fetch users: ' + error.message });
+  }
 });
 
 // ============ DEPARTMENT ROUTES ============
@@ -425,7 +469,7 @@ app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) 
 app.put('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, manager, description, status, members, projects } = req.body;
+    const { name, manager, description, status, members, projects, type, parentId } = req.body;
 
     console.log('📝 Updating department:', id);
 
@@ -458,6 +502,15 @@ app.put('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req, re
     if (projects !== undefined) {
       updateExpression.push('projects = :projects');
       expressionAttributeValues[':projects'] = projects;
+    }
+    if (type !== undefined) {
+      updateExpression.push('#type = :type');
+      expressionAttributeNames['#type'] = 'type';
+      expressionAttributeValues[':type'] = type;
+    }
+    if (parentId !== undefined) {
+      updateExpression.push('parentId = :parentId');
+      expressionAttributeValues[':parentId'] = parentId;
     }
     
     updateExpression.push('updatedAt = :updatedAt');
@@ -776,6 +829,7 @@ app.listen(PORT, () => {
   console.log('   • GET  /api/health');
   console.log('   • GET  /api/departments');
   console.log('   • POST /api/departments (Admin)');
+  console.log('   • GET  /api/users (Admin)');
   console.log('   • GET  /api/files/my-files');
   console.log('   • POST /api/files/metadata');
   console.log('');

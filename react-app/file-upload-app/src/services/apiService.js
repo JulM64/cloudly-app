@@ -211,6 +211,13 @@ class ApiService {
     });
   }
 
+  // ============ USERS METHODS ============
+
+  async getUsers() {
+    console.log('👥 Fetching Cognito users...');
+    return this.request('/users');
+  }
+
   // ============ FILE METHODS ============
 
   async saveFileMetadata(fileData) {
