@@ -1,5 +1,4 @@
 // src/services/cognitoService.js - AWS Cognito Authentication Service
-
 import {
   CognitoUserPool,
   CognitoUser,
@@ -8,428 +7,242 @@ import {
 } from 'amazon-cognito-identity-js';
 import { awsConfig } from '../config/awsConfig';
 
-// Initialize Cognito User Pool
 const userPool = new CognitoUserPool({
   UserPoolId: awsConfig.cognito.userPoolId,
   ClientId: awsConfig.cognito.userPoolWebClientId
 });
 
 class CognitoAuthService {
-  
-  // Sign Up New User
+
+  // ── Sign Up ───────────────────────────────────────────────────────────────
   signUp(email, password, firstName, lastName, department) {
     return new Promise((resolve, reject) => {
       const attributeList = [
-        new CognitoUserAttribute({ Name: 'email', Value: email }),
-        new CognitoUserAttribute({ Name: 'given_name', Value: firstName }),
-        new CognitoUserAttribute({ Name: 'family_name', Value: lastName }),
-        new CognitoUserAttribute({ Name: 'custom:department', Value: department })
+        new CognitoUserAttribute({ Name: 'email',              Value: email }),
+        new CognitoUserAttribute({ Name: 'given_name',         Value: firstName }),
+        new CognitoUserAttribute({ Name: 'family_name',        Value: lastName }),
+        new CognitoUserAttribute({ Name: 'custom:department',  Value: department }),
+        new CognitoUserAttribute({ Name: 'custom:role',        Value: 'MEMBER' }),
       ];
-
       userPool.signUp(email, password, attributeList, null, (err, result) => {
-        if (err) {
-          console.error('SignUp Error:', err);
-          reject(err);
-          return;
-        }
-        
-        console.log('User registered successfully:', result.user.getUsername());
-        resolve({
-          user: result.user,
-          userConfirmed: result.userConfirmed,
-          userSub: result.userSub
-        });
+        if (err) { reject(err); return; }
+        resolve({ user: result.user, userConfirmed: result.userConfirmed, userSub: result.userSub });
       });
     });
   }
 
-  // Confirm Sign Up (Email Verification)
+  // ── Confirm Sign Up ───────────────────────────────────────────────────────
   confirmSignUp(email, code) {
     return new Promise((resolve, reject) => {
-      const userData = {
-        Username: email,
-        Pool: userPool
-      };
-
-      const cognitoUser = new CognitoUser(userData);
-
+      const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
       cognitoUser.confirmRegistration(code, true, (err, result) => {
-        if (err) {
-          console.error('Confirmation Error:', err);
-          reject(err);
-          return;
-        }
-        console.log('User confirmed:', result);
+        if (err) { reject(err); return; }
         resolve(result);
       });
     });
   }
 
-  // Sign In
+  // ── Sign In ───────────────────────────────────────────────────────────────
   signIn(email, password) {
     return new Promise((resolve, reject) => {
-      const authenticationData = {
-        Username: email,
-        Password: password
-      };
-
-      const authenticationDetails = new AuthenticationDetails(authenticationData);
-
-      const userData = {
-        Username: email,
-        Pool: userPool
-      };
-
-      const cognitoUser = new CognitoUser(userData);
-
-      cognitoUser.authenticateUser(authenticationDetails, {
-        onSuccess: (session) => {
-          console.log('Authentication successful');
-          
-          // Get user attributes
-          cognitoUser.getUserAttributes((err, attributes) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-
-            // Parse attributes
-            const userAttributes = {};
-            attributes.forEach(attr => {
-              userAttributes[attr.Name] = attr.Value;
+      const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+      cognitoUser.authenticateUser(
+        new AuthenticationDetails({ Username: email, Password: password }),
+        {
+          onSuccess: (session) => {
+            cognitoUser.getUserAttributes((err, attributes) => {
+              if (err) { reject(err); return; }
+              const attrs = {};
+              attributes.forEach(a => { attrs[a.Name] = a.Value; });
+              this.getUserGroups(session.getIdToken().getJwtToken())
+                .then(groups => {
+                  const userData = this._buildUserData(attrs, groups, session);
+                  localStorage.setItem('cloudly_user', JSON.stringify(userData));
+                  resolve(userData);
+                })
+                .catch(() => {
+                  const userData = this._buildUserData(attrs, [], session);
+                  localStorage.setItem('cloudly_user', JSON.stringify(userData));
+                  resolve(userData);
+                });
             });
-
-            // Get user groups
-            this.getUserGroups(session.getIdToken().getJwtToken())
-              .then(groups => {
-                const userData = {
-                  email: userAttributes.email,
-                  firstName: userAttributes.given_name,
-                  lastName: userAttributes.family_name,
-                  department: userAttributes['custom:department'],
-                  userId: userAttributes.sub,
-                  groups: groups,
-                  role: this.determineRole(groups),
-                  initials: this.getInitials(userAttributes.given_name, userAttributes.family_name),
-                  color: this.getRandomColor(),
-                  idToken: session.getIdToken().getJwtToken(),
-                  accessToken: session.getAccessToken().getJwtToken(),
-                  refreshToken: session.getRefreshToken().getToken()
-                };
-
-                // Save to localStorage
-                localStorage.setItem('cloudly_user', JSON.stringify(userData));
-                resolve(userData);
-              })
-              .catch(err => {
-                console.error('Error getting groups:', err);
-                // Continue without groups
-                const userData = {
-                  email: userAttributes.email,
-                  firstName: userAttributes.given_name,
-                  lastName: userAttributes.family_name,
-                  department: userAttributes['custom:department'],
-                  userId: userAttributes.sub,
-                  groups: [],
-                  role: 'USER',
-                  initials: this.getInitials(userAttributes.given_name, userAttributes.family_name),
-                  color: this.getRandomColor(),
-                  idToken: session.getIdToken().getJwtToken(),
-                  accessToken: session.getAccessToken().getJwtToken(),
-                  refreshToken: session.getRefreshToken().getToken()
-                };
-                localStorage.setItem('cloudly_user', JSON.stringify(userData));
-                resolve(userData);
-              });
-          });
-        },
-        onFailure: (err) => {
-          console.error('Authentication failed:', err);
-          reject(err);
-        },
-        newPasswordRequired: (userAttributes, requiredAttributes) => {
-          // Handle new password required
-          reject({ 
-            code: 'NewPasswordRequired', 
-            userAttributes, 
-            requiredAttributes,
-            cognitoUser: cognitoUser 
-          });
+          },
+          onFailure: (err) => reject(err),
+          newPasswordRequired: (userAttributes, requiredAttributes) => {
+            reject({ code: 'NewPasswordRequired', userAttributes, requiredAttributes, cognitoUser });
+          }
         }
-      });
+      );
     });
   }
 
-  // Complete New Password Challenge
+  // ── Complete New Password ─────────────────────────────────────────────────
   completeNewPassword(cognitoUser, newPassword, userAttributes) {
     return new Promise((resolve, reject) => {
-      // Remove attributes that shouldn't be updated
       delete userAttributes.email_verified;
       delete userAttributes.email;
-      
       cognitoUser.completeNewPasswordChallenge(newPassword, userAttributes, {
         onSuccess: (session) => {
-          console.log('Password changed successfully');
-          
-          // Get user attributes
           cognitoUser.getUserAttributes((err, attributes) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-
-            // Parse attributes
-            const parsedAttributes = {};
-            attributes.forEach(attr => {
-              parsedAttributes[attr.Name] = attr.Value;
-            });
-
-            // Get groups and build user data
+            if (err) { reject(err); return; }
+            const attrs = {};
+            attributes.forEach(a => { attrs[a.Name] = a.Value; });
             this.getUserGroups(session.getIdToken().getJwtToken())
               .then(groups => {
-                const userData = {
-                  email: parsedAttributes.email,
-                  firstName: parsedAttributes.given_name,
-                  lastName: parsedAttributes.family_name,
-                  department: parsedAttributes['custom:department'],
-                  userId: parsedAttributes.sub,
-                  groups: groups,
-                  role: this.determineRole(groups),
-                  initials: this.getInitials(parsedAttributes.given_name, parsedAttributes.family_name),
-                  color: this.getRandomColor(),
-                  idToken: session.getIdToken().getJwtToken(),
-                  accessToken: session.getAccessToken().getJwtToken(),
-                  refreshToken: session.getRefreshToken().getToken()
-                };
-
+                const userData = this._buildUserData(attrs, groups, session);
                 localStorage.setItem('cloudly_user', JSON.stringify(userData));
                 resolve(userData);
               });
           });
         },
-        onFailure: (err) => {
-          console.error('Password change failed:', err);
-          reject(err);
-        }
+        onFailure: (err) => reject(err)
       });
     });
   }
 
-  // Get Current User
+  // ── Get Current User ──────────────────────────────────────────────────────
   getCurrentUser() {
     return new Promise((resolve, reject) => {
       const cognitoUser = userPool.getCurrentUser();
-
-      if (!cognitoUser) {
-        reject(new Error('No user logged in'));
-        return;
-      }
-
+      if (!cognitoUser) { reject(new Error('No user logged in')); return; }
       cognitoUser.getSession((err, session) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        if (!session.isValid()) {
-          reject(new Error('Session expired'));
-          return;
-        }
-
-        // Get user attributes
+        if (err || !session.isValid()) { reject(err || new Error('Session expired')); return; }
         cognitoUser.getUserAttributes((err, attributes) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-
-          const userAttributes = {};
-          attributes.forEach(attr => {
-            userAttributes[attr.Name] = attr.Value;
-          });
-
-          resolve({
-            email: userAttributes.email,
-            firstName: userAttributes.given_name,
-            lastName: userAttributes.family_name,
-            department: userAttributes['custom:department'],
-            userId: userAttributes.sub,
-            session: session
-          });
+          if (err) { reject(err); return; }
+          const attrs = {};
+          attributes.forEach(a => { attrs[a.Name] = a.Value; });
+          resolve({ email: attrs.email, firstName: attrs.given_name, lastName: attrs.family_name, department: attrs['custom:department'], userId: attrs.sub, session });
         });
       });
     });
   }
 
-  // Sign Out
+  // ── Sign Out ──────────────────────────────────────────────────────────────
   signOut() {
     const cognitoUser = userPool.getCurrentUser();
-    if (cognitoUser) {
-      cognitoUser.signOut();
-    }
+    if (cognitoUser) cognitoUser.signOut();
     localStorage.removeItem('cloudly_user');
   }
 
-  // Get User Groups from ID Token
+  // ── Get User Groups from token ────────────────────────────────────────────
   getUserGroups(idToken) {
     return new Promise((resolve) => {
       try {
-        // Decode JWT token
         const payload = JSON.parse(atob(idToken.split('.')[1]));
-        const groups = payload['cognito:groups'] || [];
-        resolve(groups);
-      } catch (err) {
-        console.error('Error decoding token:', err);
-        resolve([]);
-      }
+        resolve(payload['cognito:groups'] || []);
+      } catch { resolve([]); }
     });
   }
 
-  // Determine User Role from Groups
-  determineRole(groups) {
-    if (groups.includes(awsConfig.groups.SUPER_ADMIN)) {
-      return 'SUPER_ADMIN';
-    } else if (groups.includes(awsConfig.groups.DEPARTMENT_ADMIN)) {
-      return 'DEPARTMENT_ADMIN';
-    } else {
-      return 'USER';
-    }
+  // ── CORE FIX: Determine Role ──────────────────────────────────────────────
+  // Priority: Cognito group (Administrators) > custom:role attribute > default MEMBER
+  determineRole(groups, customRole) {
+    // Cognito group always wins
+    if (groups.includes('Administrators')) return 'SUPER_ADMIN';
+    // Then respect custom:role attribute set by admin
+    if (customRole && ['DEPT_HEAD','UNIT_HEAD','MEMBER'].includes(customRole)) return customRole;
+    // Legacy group support
+    if (groups.includes('DepartmentAdmins')) return 'DEPT_HEAD';
+    // Default
+    return 'MEMBER';
   }
 
-  // Get User Initials
+  // ── Build user data object (shared by signIn + completeNewPassword) ───────
+  _buildUserData(attrs, groups, session) {
+    const customRole = attrs['custom:role'] || null;
+    const role       = this.determineRole(groups, customRole);
+
+    console.log('👤 Building user data:');
+    console.log('   Email:', attrs.email);
+    console.log('   Groups:', groups);
+    console.log('   custom:role:', customRole);
+    console.log('   → Final role:', role);
+    console.log('   Department:', attrs['custom:department']);
+
+    return {
+      email:        attrs.email,
+      firstName:    attrs.given_name || attrs.email,
+      lastName:     attrs.family_name || '',
+      department:   attrs['custom:department'] || '',
+      role:         role,
+      userId:       attrs.sub,
+      groups:       groups,
+      initials:     this.getInitials(attrs.given_name, attrs.family_name),
+      color:        this.getRandomColor(),
+      idToken:      session.getIdToken().getJwtToken(),
+      accessToken:  session.getAccessToken().getJwtToken(),
+      refreshToken: session.getRefreshToken().getToken()
+    };
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   getInitials(firstName, lastName) {
-    const first = firstName ? firstName.charAt(0).toUpperCase() : '';
-    const last = lastName ? lastName.charAt(0).toUpperCase() : '';
-    return first + last;
+    const f = firstName ? firstName.charAt(0).toUpperCase() : '';
+    const l = lastName  ? lastName.charAt(0).toUpperCase()  : '';
+    return f + l || 'U';
   }
 
-  // Get Random Color for Avatar
   getRandomColor() {
-    const colors = ['#4caf50', '#2196f3', '#ff9800', '#9c27b0', '#f44336', '#00bcd4'];
+    const colors = ['#4caf50','#2196f3','#ff9800','#9c27b0','#f44336','#00bcd4'];
     return colors[Math.floor(Math.random() * colors.length)];
   }
 
-  // Change Password
+  // ── Change Password ───────────────────────────────────────────────────────
   changePassword(oldPassword, newPassword) {
     return new Promise((resolve, reject) => {
       const cognitoUser = userPool.getCurrentUser();
-
-      if (!cognitoUser) {
-        reject(new Error('No user logged in'));
-        return;
-      }
-
+      if (!cognitoUser) { reject(new Error('No user logged in')); return; }
       cognitoUser.getSession((err, session) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
+        if (err) { reject(err); return; }
         cognitoUser.changePassword(oldPassword, newPassword, (err, result) => {
-          if (err) {
-            reject(err);
-            return;
-          }
+          if (err) { reject(err); return; }
           resolve(result);
         });
       });
     });
   }
 
-  // Forgot Password
+  // ── Forgot Password ───────────────────────────────────────────────────────
   forgotPassword(email) {
     return new Promise((resolve, reject) => {
-      const userData = {
-        Username: email,
-        Pool: userPool
-      };
-
-      const cognitoUser = new CognitoUser(userData);
-
-      cognitoUser.forgotPassword({
-        onSuccess: (data) => {
-          resolve(data);
-        },
-        onFailure: (err) => {
-          reject(err);
-        }
-      });
+      const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+      cognitoUser.forgotPassword({ onSuccess: resolve, onFailure: reject });
     });
   }
 
-  // Confirm Forgot Password
+  // ── Confirm Forgot Password ───────────────────────────────────────────────
   confirmPassword(email, code, newPassword) {
     return new Promise((resolve, reject) => {
-      const userData = {
-        Username: email,
-        Pool: userPool
-      };
-
-      const cognitoUser = new CognitoUser(userData);
-
+      const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
       cognitoUser.confirmPassword(code, newPassword, {
-        onSuccess: () => {
-          resolve('Password reset successful');
-        },
-        onFailure: (err) => {
-          reject(err);
-        }
+        onSuccess: () => resolve('Password reset successful'),
+        onFailure: reject
       });
     });
   }
 
-  // Get Session Token
+  // ── Get Session Token ─────────────────────────────────────────────────────
   getSessionToken() {
     return new Promise((resolve, reject) => {
       const cognitoUser = userPool.getCurrentUser();
-
-      if (!cognitoUser) {
-        reject(new Error('No user logged in'));
-        return;
-      }
-
+      if (!cognitoUser) { reject(new Error('No user logged in')); return; }
       cognitoUser.getSession((err, session) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        resolve({
-          idToken: session.getIdToken().getJwtToken(),
-          accessToken: session.getAccessToken().getJwtToken()
-        });
+        if (err) { reject(err); return; }
+        resolve({ idToken: session.getIdToken().getJwtToken(), accessToken: session.getAccessToken().getJwtToken() });
       });
     });
   }
 
-  // Refresh Session
+  // ── Refresh Session ───────────────────────────────────────────────────────
   refreshSession() {
     return new Promise((resolve, reject) => {
       const cognitoUser = userPool.getCurrentUser();
-
-      if (!cognitoUser) {
-        reject(new Error('No user logged in'));
-        return;
-      }
-
+      if (!cognitoUser) { reject(new Error('No user logged in')); return; }
       cognitoUser.getSession((err, session) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const refreshToken = session.getRefreshToken();
-        
-        cognitoUser.refreshSession(refreshToken, (err, newSession) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-
-          resolve({
-            idToken: newSession.getIdToken().getJwtToken(),
-            accessToken: newSession.getAccessToken().getJwtToken()
-          });
+        if (err) { reject(err); return; }
+        cognitoUser.refreshSession(session.getRefreshToken(), (err, newSession) => {
+          if (err) { reject(err); return; }
+          resolve({ idToken: newSession.getIdToken().getJwtToken(), accessToken: newSession.getAccessToken().getJwtToken() });
         });
       });
     });

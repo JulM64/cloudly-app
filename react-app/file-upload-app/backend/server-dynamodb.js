@@ -1,840 +1,618 @@
-// server-dynamodb.js - AWS Cognito + DynamoDB Backend
+// server-dynamodb.js - AWS Cognito + DynamoDB Backend - FULL ROLE MANAGEMENT
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const AWS = require('aws-sdk');
 const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// AWS Configuration
 AWS.config.update({
   region: process.env.AWS_REGION || 'us-east-1',
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
 });
 
-// Initialize AWS Services
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
-const s3 = new AWS.S3();
-const cognito = new AWS.CognitoIdentityServiceProvider({
-  region: process.env.AWS_REGION || 'us-east-1'
-});
+const s3       = new AWS.S3();
+const cognito  = new AWS.CognitoIdentityServiceProvider({ region: process.env.AWS_REGION || 'us-east-1' });
 
-// ============ CORS CONFIGURATION (FIXED FOR CODESPACES) ============
+// ── CORS ──────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
 app.use(express.json());
 
-// Handle preflight for Codespaces
-app.options('*', (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.status(204).send('');
-});
-
-// ============ COGNITO TOKEN VERIFICATION (SIMPLIFIED) ============
-
-// Verify Cognito Token Middleware
+// ── TOKEN VERIFICATION ────────────────────────────────────────────────────────
 function verifyCognitoToken(req, res, next) {
-  console.log('');
-  console.log('🔐 ============================================');
-  console.log('🔐 TOKEN VERIFICATION');
-  console.log('🔐 ============================================');
-
   const token = req.headers.authorization?.replace('Bearer ', '');
-  
-  if (!token) {
-    console.log('❌ No token provided');
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  console.log('📝 Token received (first 30 chars):', token.substring(0, 30) + '...');
-
-  // Decode token without verification (simple approach)
+  if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
     const decoded = jwt.decode(token, { complete: true });
-    
-    if (!decoded || !decoded.payload) {
-      throw new Error('Invalid token format');
-    }
-
-    console.log('✅ Token decoded');
-    console.log('   Email:', decoded.payload.email);
-    console.log('   Groups:', decoded.payload['cognito:groups']);
-
+    if (!decoded?.payload) throw new Error('Invalid token');
     req.user = {
-      userId: decoded.payload.sub,
-      email: decoded.payload.email,
-      groups: decoded.payload['cognito:groups'] || [],
+      userId:     decoded.payload.sub,
+      email:      decoded.payload.email,
+      groups:     decoded.payload['cognito:groups'] || [],
       department: decoded.payload['custom:department'],
-      firstName: decoded.payload.given_name || 'User'
+      role:       decoded.payload['custom:role'],
+      firstName:  decoded.payload.given_name || 'User'
     };
-
-    // Determine role
     if (req.user.groups.includes('Administrators')) {
-      req.user.role = 'SUPER_ADMIN';
-      req.user.isAdmin = true;
-    } else if (req.user.groups.includes('DepartmentAdmins')) {
-      req.user.role = 'DEPARTMENT_ADMIN';
+      req.user.role = 'SUPER_ADMIN'; req.user.isAdmin = true;
+    } else if (req.user.role === 'DEPT_HEAD') {
+      req.user.isAdmin = false;
+    } else if (req.user.role === 'UNIT_HEAD') {
       req.user.isAdmin = false;
     } else {
-      req.user.role = 'USER';
-      req.user.isAdmin = false;
+      req.user.role = req.user.role || 'MEMBER'; req.user.isAdmin = false;
     }
-
-    console.log('   Role:', req.user.role);
-    console.log('🔐 ============================================');
-    console.log('');
-
     next();
-  } catch (error) {
-    console.error('❌ Token verification failed:', error.message);
-    console.log('🔐 ============================================');
-    console.log('');
-    res.status(401).json({ 
-      error: 'Invalid token',
-      details: error.message 
-    });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token', details: err.message });
   }
 }
 
-// Admin middleware
 function requireAdmin(req, res, next) {
-  console.log('🔒 Checking admin privileges...');
-  console.log('   User role:', req.user.role);
-  
-  if (req.user.role !== 'SUPER_ADMIN') {
-    console.log('❌ Access denied - not admin');
-    return res.status(403).json({ error: 'Admin privileges required' });
-  }
-  
-  console.log('✅ Admin access granted');
+  if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Admin privileges required' });
   next();
 }
 
-// ============ ACTIVITY LOGGING ============
-async function logActivity(userId, email, action, target, details = {}) {
-  try {
-    const activity = {
-      userId,
-      timestamp: Date.now(),
-      email,
-      action,
-      target,
-      details: JSON.stringify(details),
-      createdAt: new Date().toISOString()
-    };
-
-    const params = {
-      TableName: 'cloudly-activities',
-      Item: activity
-    };
-
-    await dynamoDB.put(params).promise();
-    console.log('📝 Activity logged:', action, 'by', email);
-  } catch (error) {
-    console.error('❌ Error logging activity:', error);
+function requireHeadOrAdmin(req, res, next) {
+  if (!['SUPER_ADMIN','DEPT_HEAD','UNIT_HEAD'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Head or Admin privileges required' });
   }
+  next();
 }
 
-// ============ HEALTH CHECK ============
-app.get('/api/health', (req, res) => {
-  console.log('❤️ Health check requested');
-  res.json({ 
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    services: {
-      dynamodb: 'configured',
-      s3: 'configured',
-      cognito: 'configured'
-    }
-  });
-});
+// ── ACTIVITY LOGGING ──────────────────────────────────────────────────────────
+async function logActivity(userId, email, action, target, details = {}) {
+  try {
+    await dynamoDB.put({
+      TableName: 'cloudly-activities',
+      Item: { userId, timestamp: Date.now(), email, action, target, details: JSON.stringify(details), createdAt: new Date().toISOString() }
+    }).promise();
+  } catch (err) { console.error('❌ Activity log error:', err); }
+}
 
-app.get('/api/test', (req, res) => {
-  console.log('🧪 Test endpoint hit');
-  res.json({ 
-    success: true,
-    message: '✅ Backend is working perfectly!',
-    timestamp: new Date().toISOString(),
-    env: {
-      region: process.env.AWS_REGION,
-      hasCognitoConfig: !!(process.env.COGNITO_USER_POOL_ID),
-      hasAwsKeys: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
-    }
-  });
-});
+// ── HEALTH / TEST ─────────────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
+app.get('/api/test',   (req, res) => res.json({ success: true, message: '✅ Backend working!', timestamp: new Date().toISOString() }));
 
-// ============ USERS ROUTE (for Members modal) ============
+// ══════════════════════════════════════════════════════════════════════════════
+// USERS ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Get all Cognito users (Admin only)
+// Get all Cognito users
 app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    console.log('👥 Fetching Cognito users...');
-
-    const params = {
-      UserPoolId: process.env.COGNITO_USER_POOL_ID,
-      Limit: 60
-    };
-
-    const result = await cognito.listUsers(params).promise();
-
+    const result = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise();
     const users = (result.Users || []).map(u => {
-      const attr = (name) => (u.Attributes || []).find(a => a.Name === name)?.Value || '';
+      const attr = n => (u.Attributes || []).find(a => a.Name === n)?.Value || '';
       return {
-        email: attr('email'),
-        name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
+        email:      attr('email'),
+        name:       `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
         department: attr('custom:department'),
-        status: u.UserStatus,
-        groups: []
+        role:       attr('custom:role') || 'MEMBER',
+        status:     u.UserStatus,
+        username:   u.Username
       };
     });
-
-    console.log(`✅ Found ${users.length} users`);
     res.json({ users });
-  } catch (error) {
-    console.error('❌ Error fetching users:', error);
-    res.status(500).json({ error: 'Failed to fetch users: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users: ' + err.message });
   }
 });
 
-// ============ DEPARTMENT ROUTES ============
+// Update user department in Cognito
+app.put('/api/users/:email/department', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { department } = req.body;
+    const listResult = await cognito.listUsers({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Filter: `email = "${email}"`, Limit: 1
+    }).promise();
+    if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found' });
+    await cognito.adminUpdateUserAttributes({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Username: listResult.Users[0].Username,
+      UserAttributes: [{ Name: 'custom:department', Value: department }]
+    }).promise();
+    await logActivity(req.user.userId, req.user.email, 'UPDATE_USER_DEPARTMENT', email, { department });
+    res.json({ message: 'User department updated', email, department });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update department: ' + err.message });
+  }
+});
 
-// Get All Departments
+// ══════════════════════════════════════════════════════════════════════════════
+// ROLE REQUEST ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Propose a role change (Admin or DEPT_HEAD can propose)
+app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { targetEmail, targetName, newRole, department, reason } = req.body;
+    if (!targetEmail || !newRole) return res.status(400).json({ error: 'targetEmail and newRole required' });
+
+    const validRoles = ['MEMBER', 'UNIT_HEAD', 'DEPT_HEAD'];
+    if (!validRoles.includes(newRole)) return res.status(400).json({ error: 'Invalid role. Must be MEMBER, UNIT_HEAD, or DEPT_HEAD' });
+
+    // DEPT_HEAD can only propose roles within their own department
+    if (req.user.role === 'DEPT_HEAD' && newRole === 'DEPT_HEAD') {
+      return res.status(403).json({ error: 'DEPT_HEAD cannot promote others to DEPT_HEAD. Only SUPER_ADMIN can.' });
+    }
+
+    const requestId = `role_req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const roleRequest = {
+      requestId,
+      targetEmail,
+      targetName:    targetName || targetEmail,
+      newRole,
+      department:    department || req.user.department,
+      reason:        reason || '',
+      proposedBy:    req.user.email,
+      proposedByRole: req.user.role,
+      status:        'PENDING',
+      createdAt:     new Date().toISOString(),
+      updatedAt:     new Date().toISOString()
+    };
+
+    await dynamoDB.put({ TableName: 'cloudly-role-requests', Item: roleRequest }).promise();
+    await logActivity(req.user.userId, req.user.email, 'PROPOSE_ROLE_CHANGE', targetEmail, { newRole, department });
+
+    console.log(`📋 Role request created: ${targetEmail} → ${newRole} by ${req.user.email}`);
+    res.status(201).json({ message: 'Role change request submitted for approval', roleRequest });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create role request: ' + err.message });
+  }
+});
+
+// Get all role requests (SUPER_ADMIN sees all, DEPT_HEAD sees their dept)
+app.get('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise();
+    let requests = result.Items || [];
+
+    // DEPT_HEAD only sees requests in their department
+    if (req.user.role === 'DEPT_HEAD') {
+      requests = requests.filter(r => r.department === req.user.department);
+    }
+
+    // Sort by newest first
+    requests.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const pending = requests.filter(r => r.status === 'PENDING').length;
+
+    res.json({ requests, pendingCount: pending });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch role requests: ' + err.message });
+  }
+});
+
+// Get pending count only (for notification badge)
+app.get('/api/role-requests/pending-count', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise();
+    let pending = (result.Items || []).filter(r => r.status === 'PENDING');
+    if (req.user.role === 'DEPT_HEAD') {
+      pending = pending.filter(r => r.department === req.user.department);
+    }
+    res.json({ pendingCount: pending.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get pending count: ' + err.message });
+  }
+});
+
+// Approve role request (SUPER_ADMIN only)
+app.put('/api/role-requests/:requestId/approve', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+
+    // Get the request
+    const result = await dynamoDB.get({ TableName: 'cloudly-role-requests', Key: { requestId } }).promise();
+    if (!result.Item) return res.status(404).json({ error: 'Role request not found' });
+    if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Request already processed' });
+
+    const roleRequest = result.Item;
+
+    // Find user in Cognito
+    const listResult = await cognito.listUsers({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Filter: `email = "${roleRequest.targetEmail}"`, Limit: 1
+    }).promise();
+    if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found in Cognito' });
+
+    // Update custom:role in Cognito
+    await cognito.adminUpdateUserAttributes({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Username: listResult.Users[0].Username,
+      UserAttributes: [{ Name: 'custom:role', Value: roleRequest.newRole }]
+    }).promise();
+
+    // Mark request as approved
+    await dynamoDB.update({
+      TableName: 'cloudly-role-requests',
+      Key: { requestId },
+      UpdateExpression: 'set #s = :s, approvedBy = :ab, approvedAt = :aa, updatedAt = :ua',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: {
+        ':s': 'APPROVED', ':ab': req.user.email,
+        ':aa': new Date().toISOString(), ':ua': new Date().toISOString()
+      }
+    }).promise();
+
+    // Also update membersList role in department
+    try {
+      const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+      const dept = (deptResult.Items || []).find(d => d.name === roleRequest.department);
+      if (dept && Array.isArray(dept.membersList)) {
+        const updatedMembers = dept.membersList.map(m =>
+          m.email === roleRequest.targetEmail ? { ...m, role: roleRequest.newRole } : m
+        );
+        await dynamoDB.update({
+          TableName: 'cloudly-departments',
+          Key: { id: dept.id },
+          UpdateExpression: 'set membersList = :ml, updatedAt = :ua',
+          ExpressionAttributeValues: { ':ml': updatedMembers, ':ua': new Date().toISOString() }
+        }).promise();
+      }
+    } catch (deptErr) { console.warn('Could not update dept membersList:', deptErr.message); }
+
+    await logActivity(req.user.userId, req.user.email, 'APPROVE_ROLE_CHANGE', roleRequest.targetEmail, { newRole: roleRequest.newRole });
+
+    console.log(`✅ Role approved: ${roleRequest.targetEmail} → ${roleRequest.newRole}`);
+    res.json({ message: 'Role change approved and applied', roleRequest: { ...roleRequest, status: 'APPROVED' } });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve role request: ' + err.message });
+  }
+});
+
+// Reject role request (SUPER_ADMIN only)
+app.put('/api/role-requests/:requestId/reject', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+
+    const result = await dynamoDB.get({ TableName: 'cloudly-role-requests', Key: { requestId } }).promise();
+    if (!result.Item) return res.status(404).json({ error: 'Role request not found' });
+    if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Request already processed' });
+
+    await dynamoDB.update({
+      TableName: 'cloudly-role-requests',
+      Key: { requestId },
+      UpdateExpression: 'set #s = :s, rejectedBy = :rb, rejectedAt = :ra, rejectReason = :rr, updatedAt = :ua',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: {
+        ':s': 'REJECTED', ':rb': req.user.email,
+        ':ra': new Date().toISOString(), ':rr': reason || '',
+        ':ua': new Date().toISOString()
+      }
+    }).promise();
+
+    await logActivity(req.user.userId, req.user.email, 'REJECT_ROLE_CHANGE', result.Item.targetEmail, { reason });
+
+    res.json({ message: 'Role change request rejected' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reject role request: ' + err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DEPARTMENT ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
+
 app.get('/api/departments', verifyCognitoToken, async (req, res) => {
   try {
-    console.log('📂 Fetching departments from DynamoDB...');
-    
-    const params = {
-      TableName: 'cloudly-departments'
-    };
+    const result = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    let departments = result.Items || [];
 
-    const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} departments`);
-    
-    const departments = result.Items.sort((a, b) => 
-      new Date(b.createdAt) - new Date(a.createdAt)
-    );
-    
+    // DEPT_HEAD: only their dept + its units
+    if (req.user.role === 'DEPT_HEAD') {
+      const userDept = (req.user.department || '').toLowerCase().trim();
+
+      // Find their department (case-insensitive, top-level only)
+      const myDept = departments.find(d =>
+        (d.name || '').toLowerCase().trim() === userDept &&
+        (!d.type || d.type === 'department')
+      );
+
+      if (myDept) {
+        // Return their dept + all units whose parentId matches
+        departments = departments.filter(d =>
+          d.id === myDept.id || d.parentId === myDept.id
+        );
+      } else {
+        // Fallback: match by name only (case-insensitive)
+        departments = departments.filter(d =>
+          (d.name || '').toLowerCase().trim() === userDept
+        );
+      }
+
+      console.log(`🏢 DEPT_HEAD ${req.user.email} (dept: ${req.user.department}) → ${departments.length} dept/units`);
+    }
+    // UNIT_HEAD: only their unit
+    else if (req.user.role === 'UNIT_HEAD') {
+      const userDept = (req.user.department || '').toLowerCase().trim();
+      departments = departments.filter(d =>
+        (d.name || '').toLowerCase().trim() === userDept
+      );
+      console.log(`🔷 UNIT_HEAD ${req.user.email} (unit: ${req.user.department}) → ${departments.length} units`);
+    }
+
+    departments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ departments });
-  } catch (error) {
-    console.error('❌ Error fetching departments:', error);
-    res.status(500).json({ error: 'Failed to fetch departments: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch departments: ' + err.message });
   }
 });
 
-// Get Department Hierarchy
 app.get('/api/departments/hierarchy', verifyCognitoToken, async (req, res) => {
   try {
-    console.log('🌲 Fetching department hierarchy...');
-    
-    const params = {
-      TableName: 'cloudly-departments'
-    };
-
-    const result = await dynamoDB.scan(params).promise();
-    const allDepartments = result.Items || [];
-    
-    // Build hierarchy
-    const topLevel = allDepartments.filter(d => !d.parentId);
-    
-    const buildTree = (parentId) => {
-      return allDepartments
-        .filter(d => d.parentId === parentId)
-        .map(dept => ({
-          ...dept,
-          children: buildTree(dept.id)
-        }));
-    };
-    
-    const hierarchy = topLevel.map(dept => ({
-      ...dept,
-      children: buildTree(dept.id)
-    }));
-    
-    console.log(`✅ Built hierarchy with ${topLevel.length} top-level departments`);
-    
-    res.json({ hierarchy, allDepartments });
-  } catch (error) {
-    console.error('❌ Error fetching hierarchy:', error);
-    res.status(500).json({ error: 'Failed to fetch hierarchy: ' + error.message });
+    const result = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const all = result.Items || [];
+    const topLevel = all.filter(d => !d.parentId);
+    const buildTree = pid => all.filter(d => d.parentId === pid).map(d => ({ ...d, children: buildTree(d.id) }));
+    res.json({ hierarchy: topLevel.map(d => ({ ...d, children: buildTree(d.id) })), allDepartments: all });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch hierarchy: ' + err.message });
   }
 });
 
-// Create Department (Admin only) - WITH HIERARCHY SUPPORT
 app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { name, manager, description, type, parentId } = req.body;
-
-    console.log('');
-    console.log('🆕 ============================================');
-    console.log('🆕 CREATE DEPARTMENT/UNIT REQUEST');
-    console.log('🆕 ============================================');
-    console.log('   Name:', name);
-    console.log('   Type:', type || 'department');
-    console.log('   Parent:', parentId || 'none');
-    console.log('   Manager:', manager);
-    console.log('   Requested by:', req.user.email);
-    console.log('');
-
-    // Validation
-    if (!name || name.trim() === '') {
-      return res.status(400).json({ error: 'Name is required' });
-    }
-
-    // Default to 'department' if type not specified
+    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
     const itemType = type || 'department';
+    if (itemType === 'unit' && !parentId) return res.status(400).json({ error: 'Units must have a parent department' });
 
-    // If it's a unit, it must have a parent department
-    if (itemType === 'unit' && !parentId) {
-      return res.status(400).json({ error: 'Units must have a parent department' });
-    }
-
-    // Validate parent exists if provided
     if (parentId) {
-      const parentParams = {
-        TableName: 'cloudly-departments',
-        Key: { id: parentId }
-      };
-      const parentResult = await dynamoDB.get(parentParams).promise();
-      if (!parentResult.Item) {
-        return res.status(404).json({ error: 'Parent department not found' });
-      }
-      console.log('   Parent validated:', parentResult.Item.name);
+      const p = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id: parentId } }).promise();
+      if (!p.Item) return res.status(404).json({ error: 'Parent department not found' });
     }
 
-    // Check AWS credentials
-    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-      console.error('❌ AWS credentials not configured in .env');
-      return res.status(500).json({ 
-        error: 'AWS credentials not configured' 
-      });
-    }
-
-    // Generate unique ID
     const departmentId = `dept_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    console.log('   Generated ID:', departmentId);
-    
-    // Create S3 bucket name
-    const sanitizedName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    const bucketName = `${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}-${sanitizedName}`;
+    const bucketName   = `${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}-${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
 
-    console.log('');
-    console.log('☁️  STEP 1: Creating S3 bucket');
-    console.log('   Bucket name:', bucketName);
-
-    // Create S3 bucket
     try {
-      try {
-        await s3.headBucket({ Bucket: bucketName }).promise();
-        console.log('   ℹ️  Bucket already exists');
-      } catch (headErr) {
-        if (headErr.code === 'NotFound' || headErr.code === 'NoSuchBucket') {
-          console.log('   Creating new bucket...');
-          
-          await s3.createBucket({
-            Bucket: bucketName,
-            ACL: 'private'
-          }).promise();
-          
-          console.log('   ✅ S3 bucket created successfully!');
-        } else {
-          throw headErr;
-        }
-      }
-
-      console.log('');
-      console.log('🔧 STEP 2: Configuring CORS');
-      
-      await s3.putBucketCors({
-        Bucket: bucketName,
-        CORSConfiguration: {
-          CORSRules: [{
-            AllowedHeaders: ['*'],
-            AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
-            AllowedOrigins: [
-              'http://localhost:3000',
-              'http://127.0.0.1:3000',
-              '*'
-            ],
-            ExposeHeaders: ['ETag', 'x-amz-meta-custom-header'],
-            MaxAgeSeconds: 3000
-          }]
-        }
-      }).promise();
-      
-      console.log('   ✅ CORS configured successfully!');
-
-    } catch (s3Error) {
-      console.error('');
-      console.error('❌ S3 ERROR:', s3Error.code);
-      console.error('   Message:', s3Error.message);
-      
-      if (s3Error.code === 'InvalidAccessKeyId' || s3Error.code === 'SignatureDoesNotMatch') {
-        return res.status(500).json({ 
-          error: 'AWS credentials are invalid' 
-        });
-      }
-      
-      if (s3Error.code === 'AccessDenied') {
-        return res.status(500).json({ 
-          error: 'AWS user does not have S3 permissions' 
-        });
-      }
-
-      if (s3Error.code === 'BucketAlreadyExists') {
-        console.log('   ℹ️  Bucket exists but owned by another account');
-        return res.status(400).json({ 
-          error: `Bucket name already taken. Try a different name.` 
-        });
-      }
-      
-      return res.status(500).json({ 
-        error: `Failed to create S3 bucket: ${s3Error.message}`,
-        code: s3Error.code
-      });
+      await s3.headBucket({ Bucket: bucketName }).promise();
+    } catch (e) {
+      if (e.code === 'NotFound' || e.code === 'NoSuchBucket') {
+        await s3.createBucket({ Bucket: bucketName, ACL: 'private' }).promise();
+        await s3.putBucketCors({
+          Bucket: bucketName,
+          CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET','PUT','POST','DELETE','HEAD'], AllowedOrigins: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] }
+        }).promise();
+      } else throw e;
     }
 
-    // Save to DynamoDB with hierarchy
-    console.log('');
-    console.log('💾 STEP 3: Saving to DynamoDB');
-    
     const department = {
-      id: departmentId,
-      name,
-      s3Bucket: bucketName,
-      manager: manager || 'Not assigned',
-      description: description || '',
-      type: itemType,
-      parentId: parentId || null,
-      status: 'Active',
-      members: 0,
-      projects: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      id: departmentId, name, s3Bucket: bucketName,
+      manager: manager || 'Not assigned', description: description || '',
+      type: itemType, parentId: parentId || null,
+      status: 'Active', members: 0, membersList: [], projects: 0,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     };
 
-    const params = {
-      TableName: 'cloudly-departments',
-      Item: department
-    };
-
-    await dynamoDB.put(params).promise();
-    console.log(`   ✅ ${itemType} saved to DynamoDB!`);
-
-    await logActivity(req.user.userId, req.user.email, 'CREATE_' + itemType.toUpperCase(), name, { bucketName, parentId });
-
-    console.log('');
-    console.log('✅ ============================================');
-    console.log(`✅ ${itemType.toUpperCase()} CREATED SUCCESSFULLY!`);
-    console.log('✅ ============================================');
-    console.log('   Name:', name);
-    console.log('   S3 Bucket:', bucketName);
-    console.log('   DynamoDB ID:', departmentId);
-    console.log('✅ ============================================');
-    console.log('');
-
-    res.status(201).json({ 
-      message: `${itemType} created successfully`,
-      department 
-    });
-  } catch (error) {
-    console.error('');
-    console.error('❌ ============================================');
-    console.error('❌ ERROR CREATING DEPARTMENT/UNIT');
-    console.error('❌ ============================================');
-    console.error('Error:', error);
-    console.error('❌ ============================================');
-    console.error('');
-    
-    res.status(500).json({ 
-      error: error.message || 'Failed to create',
-      details: error.code 
-    });
+    await dynamoDB.put({ TableName: 'cloudly-departments', Item: department }).promise();
+    await logActivity(req.user.userId, req.user.email, 'CREATE_' + itemType.toUpperCase(), name, { bucketName });
+    res.status(201).json({ message: `${itemType} created`, department });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to create', details: err.code });
   }
 });
 
-// Update Department
-app.put('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.put('/api/departments/:id', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, manager, description, status, members, projects, type, parentId } = req.body;
+    const { name, manager, description, status, members, membersList, projects, type, parentId } = req.body;
 
-    console.log('📝 Updating department:', id);
+    // UNIT_HEAD can only update their own unit
+    if (req.user.role === 'UNIT_HEAD') {
+      const dept = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id } }).promise();
+      if (dept.Item?.name !== req.user.department) return res.status(403).json({ error: 'You can only update your own unit' });
+    }
 
-    const updateExpression = [];
-    const expressionAttributeNames = {};
-    const expressionAttributeValues = {};
-
-    if (name) {
-      updateExpression.push('#name = :name');
-      expressionAttributeNames['#name'] = 'name';
-      expressionAttributeValues[':name'] = name;
-    }
-    if (manager !== undefined) {
-      updateExpression.push('manager = :manager');
-      expressionAttributeValues[':manager'] = manager;
-    }
-    if (description !== undefined) {
-      updateExpression.push('description = :description');
-      expressionAttributeValues[':description'] = description;
-    }
-    if (status) {
-      updateExpression.push('#status = :status');
-      expressionAttributeNames['#status'] = 'status';
-      expressionAttributeValues[':status'] = status;
-    }
-    if (members !== undefined) {
-      updateExpression.push('members = :members');
-      expressionAttributeValues[':members'] = members;
-    }
-    if (projects !== undefined) {
-      updateExpression.push('projects = :projects');
-      expressionAttributeValues[':projects'] = projects;
-    }
-    if (type !== undefined) {
-      updateExpression.push('#type = :type');
-      expressionAttributeNames['#type'] = 'type';
-      expressionAttributeValues[':type'] = type;
-    }
-    if (parentId !== undefined) {
-      updateExpression.push('parentId = :parentId');
-      expressionAttributeValues[':parentId'] = parentId;
-    }
-    
-    updateExpression.push('updatedAt = :updatedAt');
-    expressionAttributeValues[':updatedAt'] = new Date().toISOString();
+    const expr = []; const names = {}; const vals = {};
+    if (name)                  { expr.push('#name = :name');       names['#name'] = 'name';     vals[':name'] = name; }
+    if (manager !== undefined) { expr.push('manager = :manager');  vals[':manager'] = manager; }
+    if (description !== undefined) { expr.push('description = :description'); vals[':description'] = description; }
+    if (status)                { expr.push('#status = :status');   names['#status'] = 'status'; vals[':status'] = status; }
+    if (members !== undefined) { expr.push('members = :members');  vals[':members'] = members; }
+    if (membersList !== undefined) { expr.push('membersList = :membersList'); vals[':membersList'] = membersList; }
+    if (projects !== undefined){ expr.push('projects = :projects');vals[':projects'] = projects; }
+    if (type !== undefined)    { expr.push('#type = :type');       names['#type'] = 'type';     vals[':type'] = type; }
+    if (parentId !== undefined){ expr.push('parentId = :parentId');vals[':parentId'] = parentId; }
+    expr.push('updatedAt = :updatedAt'); vals[':updatedAt'] = new Date().toISOString();
 
     const params = {
-      TableName: 'cloudly-departments',
-      Key: { id },
-      UpdateExpression: 'set ' + updateExpression.join(', '),
-      ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW'
+      TableName: 'cloudly-departments', Key: { id },
+      UpdateExpression: 'set ' + expr.join(', '),
+      ExpressionAttributeValues: vals, ReturnValues: 'ALL_NEW'
     };
-
-    if (Object.keys(expressionAttributeNames).length > 0) {
-      params.ExpressionAttributeNames = expressionAttributeNames;
-    }
+    if (Object.keys(names).length > 0) params.ExpressionAttributeNames = names;
 
     const result = await dynamoDB.update(params).promise();
-    console.log('✅ Department updated');
-    
     res.json({ message: 'Department updated', department: result.Attributes });
-  } catch (error) {
-    console.error('❌ Error updating department:', error);
-    res.status(500).json({ error: 'Failed to update department: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update: ' + err.message });
   }
 });
 
-// Delete Department
 app.delete('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    console.log('🗑️  Deleting department:', id);
-
-    const params = {
-      TableName: 'cloudly-departments',
-      Key: { id }
-    };
-
-    await dynamoDB.delete(params).promise();
-    console.log('✅ Department deleted from DynamoDB');
-    
-    res.json({ message: 'Department deleted (S3 bucket preserved for safety)' });
-  } catch (error) {
-    console.error('❌ Error deleting department:', error);
-    res.status(500).json({ error: 'Failed to delete department: ' + error.message });
+    await dynamoDB.delete({ TableName: 'cloudly-departments', Key: { id: req.params.id } }).promise();
+    res.json({ message: 'Department deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete: ' + err.message });
   }
 });
 
-// ============ FILE ROUTES ============
+// ══════════════════════════════════════════════════════════════════════════════
+// FILE ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Save file metadata
 app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
     const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType } = req.body;
-    
-    console.log('💾 Saving file metadata for:', fileName);
-
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
     const metadata = {
-      userId: req.user.userId,
-      fileId,
-      fileName,
-      originalName,
-      s3Key,
-      s3Bucket,
-      department: req.user.department,
-      userEmail: req.user.email,
-      fileSize: fileSize || 0,
-      fileType: fileType || 'unknown',
-      uploadDate: new Date().toISOString()
+      userId: req.user.userId, fileId, fileName, originalName,
+      s3Key, s3Bucket, department: req.user.department,
+      userEmail: req.user.email, fileSize: fileSize || 0,
+      fileType: fileType || 'unknown', uploadDate: new Date().toISOString()
     };
-
-    const params = {
-      TableName: 'cloudly-files',
-      Item: metadata
-    };
-
-    await dynamoDB.put(params).promise();
-    console.log('✅ File metadata saved');
-    
+    await dynamoDB.put({ TableName: 'cloudly-files', Item: metadata }).promise();
     await logActivity(req.user.userId, req.user.email, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
-
     res.status(201).json({ message: 'File metadata saved', file: metadata });
-  } catch (error) {
-    console.error('❌ Error saving file metadata:', error);
-    res.status(500).json({ error: 'Failed to save file metadata: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save file metadata: ' + err.message });
   }
 });
 
-// Get user's files
 app.get('/api/files/my-files', verifyCognitoToken, async (req, res) => {
   try {
-    console.log('📁 Fetching files for user:', req.user.email);
-
-    const params = {
+    const result = await dynamoDB.query({
       TableName: 'cloudly-files',
       KeyConditionExpression: 'userId = :userId',
-      ExpressionAttributeValues: {
-        ':userId': req.user.userId
-      },
+      ExpressionAttributeValues: { ':userId': req.user.userId },
       ScanIndexForward: false
-    };
-
-    const result = await dynamoDB.query(params).promise();
-    console.log(`✅ Found ${result.Items.length} files`);
-    
+    }).promise();
     res.json({ files: result.Items || [] });
-  } catch (error) {
-    console.error('❌ Error fetching files:', error);
-    res.status(500).json({ error: 'Failed to fetch files: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch files: ' + err.message });
   }
 });
 
-// Get department files
+// DEPT_HEAD can see all files in their dept + units
 app.get('/api/files/department/:department', verifyCognitoToken, async (req, res) => {
   try {
     const { department } = req.params;
+    const canAccess = req.user.role === 'SUPER_ADMIN' ||
+      req.user.department === department ||
+      (req.user.role === 'DEPT_HEAD');
+    if (!canAccess) return res.status(403).json({ error: 'Access denied' });
 
-    if (req.user.role !== 'SUPER_ADMIN' && req.user.department !== department) {
-      return res.status(403).json({ error: 'Access denied to this department' });
-    }
-    
-    console.log('📁 Fetching files for department:', department);
-
-    const params = {
+    const result = await dynamoDB.scan({
       TableName: 'cloudly-files',
       FilterExpression: 'department = :dept',
       ExpressionAttributeValues: { ':dept': department }
-    };
-
-    const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} files`);
-    
+    }).promise();
     res.json({ files: result.Items || [] });
-  } catch (error) {
-    console.error('❌ Error fetching department files:', error);
-    res.status(500).json({ error: 'Failed to fetch department files: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch department files: ' + err.message });
   }
 });
 
-// Get all files (admin only)
 app.get('/api/files/all', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    console.log('📁 Fetching all files (admin)...');
-
-    const params = {
-      TableName: 'cloudly-files'
-    };
-
-    const result = await dynamoDB.scan(params).promise();
-    console.log(`✅ Found ${result.Items.length} total files`);
-    
+    const result = await dynamoDB.scan({ TableName: 'cloudly-files' }).promise();
     res.json({ files: result.Items || [] });
-  } catch (error) {
-    console.error('❌ Error fetching all files:', error);
-    res.status(500).json({ error: 'Failed to fetch all files: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch all files: ' + err.message });
   }
 });
 
-// Delete file metadata
 app.delete('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req, res) => {
   try {
     const { userId, fileId } = req.params;
-    
-    if (userId !== req.user.userId && req.user.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
-    console.log('🗑️  Deleting file metadata:', fileId);
-
-    const params = {
-      TableName: 'cloudly-files',
-      Key: { userId, fileId }
-    };
-
-    await dynamoDB.delete(params).promise();
-    console.log('✅ File metadata deleted');
-    
+    if (userId !== req.user.userId && req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Not authorized' });
+    await dynamoDB.delete({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
     res.json({ message: 'File metadata deleted' });
-  } catch (error) {
-    console.error('❌ Error deleting file metadata:', error);
-    res.status(500).json({ error: 'Failed to delete file metadata: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete: ' + err.message });
   }
 });
 
-// ============ ACTIVITY ROUTES ============
+// ══════════════════════════════════════════════════════════════════════════════
+// ACTIVITY ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Get activities
 app.get('/api/activities', verifyCognitoToken, async (req, res) => {
   try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-activities', Limit: 100 }).promise();
+    let activities = result.Items || [];
+
     if (req.user.role === 'SUPER_ADMIN') {
-      const params = {
-        TableName: 'cloudly-activities',
-        Limit: 50
-      };
-      const result = await dynamoDB.scan(params).promise();
-      const activities = result.Items.sort((a, b) => b.timestamp - a.timestamp);
-      res.json({ activities });
+      // sees all
+    } else if (req.user.role === 'DEPT_HEAD') {
+      // sees all activities of their dept members
+      const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+      const depts = (deptResult.Items || []).filter(d =>
+        d.name === req.user.department || d.parentId === (deptResult.Items.find(x => x.name === req.user.department)?.id)
+      );
+      const memberEmails = depts.flatMap(d => (d.membersList || []).map(m => m.email));
+      activities = activities.filter(a => memberEmails.includes(a.email) || a.email === req.user.email);
+    } else if (req.user.role === 'UNIT_HEAD') {
+      // sees activities of their unit members
+      const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+      const unit = (deptResult.Items || []).find(d => d.name === req.user.department);
+      const memberEmails = (unit?.membersList || []).map(m => m.email);
+      activities = activities.filter(a => memberEmails.includes(a.email) || a.email === req.user.email);
     } else {
-      const params = {
-        TableName: 'cloudly-activities',
-        KeyConditionExpression: 'userId = :userId',
-        ExpressionAttributeValues: {
-          ':userId': req.user.userId
-        },
-        Limit: 50,
-        ScanIndexForward: false
-      };
-      const result = await dynamoDB.query(params).promise();
-      res.json({ activities: result.Items || [] });
+      // MEMBER sees only own activities
+      activities = activities.filter(a => a.userId === req.user.userId);
     }
-  } catch (error) {
-    console.error('❌ Error fetching activities:', error);
-    res.status(500).json({ error: 'Failed to fetch activities: ' + error.message });
+
+    activities.sort((a, b) => b.timestamp - a.timestamp);
+    res.json({ activities: activities.slice(0, 50) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch activities: ' + err.message });
   }
 });
 
-// ============ STATS ROUTES ============
+// ══════════════════════════════════════════════════════════════════════════════
+// STATS ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Get dashboard stats
 app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
   try {
-    const params = {
+    const result = await dynamoDB.query({
       TableName: 'cloudly-files',
       KeyConditionExpression: 'userId = :userId',
-      ExpressionAttributeValues: {
-        ':userId': req.user.userId
-      }
-    };
-
-    const result = await dynamoDB.query(params).promise();
+      ExpressionAttributeValues: { ':userId': req.user.userId }
+    }).promise();
     const files = result.Items || [];
-    
-    const totalFiles = files.length;
-    const storageUsed = files.reduce((sum, file) => sum + (file.fileSize || 0), 0);
-
-    res.json({
-      stats: {
-        totalFiles,
-        storageUsed,
-        department: req.user.department || 'N/A',
-        recentUploads: files.slice(0, 5)
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch stats: ' + error.message });
+    res.json({ stats: { totalFiles: files.length, storageUsed: files.reduce((s, f) => s + (f.fileSize || 0), 0), department: req.user.department || 'N/A', recentUploads: files.slice(0, 5) } });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stats: ' + err.message });
   }
 });
 
-// Get admin stats
 app.get('/api/stats/admin', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const [deptResult, fileResult] = await Promise.all([
       dynamoDB.scan({ TableName: 'cloudly-departments' }).promise(),
       dynamoDB.scan({ TableName: 'cloudly-files' }).promise()
     ]);
-
     const departments = deptResult.Items || [];
-    const files = fileResult.Items || [];
-
-    const totalDepartments = departments.length;
-    const activeDepartments = departments.filter(d => d.status === 'Active').length;
-    const totalFiles = files.length;
-    const storageUsed = files.reduce((sum, file) => sum + (file.fileSize || 0), 0);
-
+    const files       = fileResult.Items || [];
     const departmentStats = {};
-    files.forEach(file => {
-      if (file.department) {
-        if (!departmentStats[file.department]) {
-          departmentStats[file.department] = { fileCount: 0, totalSize: 0 };
-        }
-        departmentStats[file.department].fileCount++;
-        departmentStats[file.department].totalSize += file.fileSize || 0;
+    files.forEach(f => {
+      if (f.department) {
+        if (!departmentStats[f.department]) departmentStats[f.department] = { fileCount: 0, totalSize: 0 };
+        departmentStats[f.department].fileCount++;
+        departmentStats[f.department].totalSize += f.fileSize || 0;
       }
     });
-
-    res.json({
-      stats: {
-        totalDepartments,
-        activeDepartments,
-        totalFiles,
-        storageUsed,
-        departmentStats
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error fetching admin stats:', error);
-    res.status(500).json({ error: 'Failed to fetch admin stats: ' + error.message });
+    res.json({ stats: { totalDepartments: departments.length, activeDepartments: departments.filter(d => d.status === 'Active').length, totalFiles: files.length, storageUsed: files.reduce((s, f) => s + (f.fileSize || 0), 0), departmentStats } });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch admin stats: ' + err.message });
   }
 });
 
-// ============ START SERVER ============
+// ── START ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log('');
+  console.log('\n🚀 ============================================');
+  console.log('🚀  Cloudly Backend - Running on port ' + PORT);
   console.log('🚀 ============================================');
-  console.log('🚀  Cloudly Backend Server - Running on port ' + PORT);
-  console.log('🚀 ============================================');
-  console.log('');
-  console.log('📋 Configuration:');
-  console.log('   🗄️  Database: DynamoDB');
-  console.log('   ☁️  Storage: Amazon S3');
-  console.log('   🔐 Auth: AWS Cognito');
-  console.log(`   📍 Region: ${process.env.AWS_REGION || 'us-east-1'}`);
-  console.log(`   🪣  S3 Prefix: ${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}`);
-  console.log('');
-  console.log('📊 DynamoDB Tables:');
-  console.log('   • cloudly-departments');
-  console.log('   • cloudly-files');
-  console.log('   • cloudly-activities');
-  console.log('');
-  console.log('🔗 API Endpoints:');
-  console.log('   • GET  /api/test (no auth)');
-  console.log('   • GET  /api/health');
-  console.log('   • GET  /api/departments');
-  console.log('   • POST /api/departments (Admin)');
-  console.log('   • GET  /api/users (Admin)');
-  console.log('   • GET  /api/files/my-files');
-  console.log('   • POST /api/files/metadata');
-  console.log('');
-  console.log('🚀 ============================================');
-  console.log('');
+  console.log('🔐 Roles: SUPER_ADMIN | DEPT_HEAD | UNIT_HEAD | MEMBER');
+  console.log('📋 Role requests: propose → approve/reject flow');
+  console.log('🚀 ============================================\n');
 });
 
 module.exports = app;
