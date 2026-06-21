@@ -61,6 +61,8 @@ class ApiService {
 
   // ── USERS ──────────────────────────────────────────────────────────────────
   getUsers() { return this.request('/users'); }
+  createUser(data) { return this.request('/users/create', { method: 'POST', body: data }); }
+
   updateUserDepartment(email, department) {
     return this.request(`/users/${encodeURIComponent(email)}/department`, { method: 'PUT', body: { department } });
   }
