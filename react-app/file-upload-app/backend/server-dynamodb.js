@@ -791,15 +791,26 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
     }
 
     const scopedDeptNames = new Set(scopedDepts.map(d => (d.name||'').toLowerCase().trim()));
+    const scopedMemberUserIds = new Set(
+      scopedDepts.flatMap(d => (d.membersList || []).map(m => m.userId)).filter(Boolean)
+    );
+
     const scopedFiles = (scopeLabel === 'GLOBAL')
       ? allFiles
-      : allFiles.filter(f => scopedDeptNames.has((f.department||'').toLowerCase().trim()));
+      : allFiles.filter(f =>
+          scopedDeptNames.has((f.department||'').toLowerCase().trim()) ||
+          scopedMemberUserIds.has(f.userId)
+        );
 
     const teamMembers = scopedDepts.reduce((sum, d) => sum + (d.members || 0), 0);
-    const scopedMemberEmails = new Set(scopedDepts.flatMap(d => (d.membersList || []).map(m => m.email)));
+    const scopedMemberEmails = new Set([
+      req.user.email, // always include the head themselves
+      ...scopedDepts.flatMap(d => (d.membersList || []).map(m => m.email))
+    ]);
+
     const scopedActivity = (scopeLabel === 'GLOBAL')
       ? allActivities
-      : allActivities.filter(a => scopedMemberEmails.has(a.email) || a.email === req.user.email);
+      : allActivities.filter(a => scopedMemberEmails.has(a.email));
 
     res.json({
       stats: {

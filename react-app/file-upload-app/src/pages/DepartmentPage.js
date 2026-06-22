@@ -326,6 +326,8 @@ const DepartmentPage = ({ user }) => {
       if (res.autoApproved) {
         setRoleMessage(`✅ Role changed to ${proposedRole} immediately!`);
         setCurrentMembers(prev => prev.map(m => m.email === roleTarget.email ? { ...m, role: proposedRole } : m));
+        // Reload departments so manager field clears on the table immediately
+        await loadDepartments();
       } else {
         setRoleMessage('✅ Request submitted! Awaiting SUPER_ADMIN approval.');
       }
