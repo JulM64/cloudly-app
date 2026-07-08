@@ -1,4 +1,4 @@
-// src/pages/DashboardPage.js - Role-aware, real data from backend
+// src/pages/DashboardPage.js - Role-aware dashboard with file opening
 import React, { useState, useEffect } from 'react';
 import apiService from '../services/apiService';
 
@@ -10,15 +10,28 @@ const ROLE_CONFIG = {
 };
 
 const ACTION_ICONS = {
-  UPLOAD_FILE:               '📤',
-  CREATE_DEPARTMENT:         '🏢',
-  CREATE_UNIT:               '🔷',
-  CREATE_USER:               '👤',
-  UPDATE_USER_DEPARTMENT:    '🔄',
-  PROPOSE_ROLE_CHANGE:       '📋',
-  AUTO_APPROVE_ROLE_CHANGE:  '✅',
-  APPROVE_ROLE_CHANGE:       '✅',
-  REJECT_ROLE_CHANGE:        '❌',
+  UPLOAD_FILE:              '📤',
+  CREATE_DEPARTMENT:        '🏢',
+  CREATE_UNIT:              '🔷',
+  CREATE_USER:              '👤',
+  UPDATE_USER_DEPARTMENT:   '🔄',
+  PROPOSE_ROLE_CHANGE:      '📋',
+  AUTO_APPROVE_ROLE_CHANGE: '✅',
+  APPROVE_ROLE_CHANGE:      '✅',
+  REJECT_ROLE_CHANGE:       '❌',
+};
+
+const getFileIcon = (fileType) => {
+  if (!fileType) return '📁';
+  if (fileType.startsWith('image/'))  return '🖼️';
+  if (fileType.startsWith('video/'))  return '🎬';
+  if (fileType.startsWith('audio/'))  return '🎵';
+  if (fileType === 'application/pdf') return '📄';
+  if (fileType.includes('word'))      return '📝';
+  if (fileType.includes('sheet') || fileType.includes('excel')) return '📊';
+  if (fileType.includes('presentation') || fileType.includes('powerpoint')) return '📑';
+  if (fileType.startsWith('text/'))   return '📃';
+  return '📁';
 };
 
 const formatBytes = (bytes) => {
@@ -30,27 +43,23 @@ const formatBytes = (bytes) => {
 
 const timeAgo = (iso) => {
   if (!iso) return '';
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7)  return `${d}d ago`;
   return new Date(iso).toLocaleDateString();
 };
 
-const formatActivity = (a) => {
-  const icon = ACTION_ICONS[a.action] || '📌';
-  const label = (a.action || '').replace(/_/g, ' ').toLowerCase();
-  return { icon, label };
-};
-
 const DashboardPage = ({ user }) => {
-  const [stats, setStats]     = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState('');
+  const [stats, setStats]         = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState('');
+  const [openingFile, setOpeningFile] = useState(null);
+  const [openError, setOpenError] = useState('');
 
   const roleCfg = ROLE_CONFIG[user?.role] || ROLE_CONFIG.MEMBER;
 
@@ -69,28 +78,48 @@ const DashboardPage = ({ user }) => {
 
   useEffect(() => { loadStats(); }, []);
 
-  const scopeLabel = stats?.scope === 'GLOBAL' ? 'Organization-wide'
-    : stats?.scope === 'DEPARTMENT' ? `Department: ${user?.department}`
-    : stats?.scope === 'UNIT' ? `Unit: ${user?.department}`
-    : `Your files`;
+  const handleOpenFile = async (file) => {
+    setOpenError('');
+    if (!file.userId || !file.fileId) {
+      setOpenError('Cannot open this file — missing metadata.');
+      return;
+    }
+    try {
+      setOpeningFile(file.fileId);
+      const res = await apiService.openFile(file.userId, file.fileId);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setOpenError('Failed to open file: ' + err.message);
+    } finally {
+      setOpeningFile(null);
+    }
+  };
+
+  const scopeLabel =
+    stats?.scope === 'GLOBAL'     ? 'Organization-wide' :
+    stats?.scope === 'DEPARTMENT' ? `Department: ${user?.department}` :
+    stats?.scope === 'UNIT'       ? `Unit: ${user?.department}` :
+    'Your files';
 
   const statCards = stats ? [
-    { label: 'Total Files',   value: stats.totalFiles ?? 0,                icon: '📁', color: '#0066ff' },
-    { label: 'Storage Used',  value: formatBytes(stats.storageUsed),       icon: '💾', color: '#4caf50' },
+    { label: 'Total Files',   value: stats.totalFiles ?? 0,          icon: '📁', color: '#0066ff' },
+    { label: 'Storage Used',  value: formatBytes(stats.storageUsed), icon: '💾', color: '#4caf50' },
     ...(stats.scope !== 'MEMBER' ? [
-      { label: 'Team Members', value: stats.teamMembers ?? 0,              icon: '👥', color: '#ff9800' },
+      { label: 'Team Members', value: stats.teamMembers ?? 0, icon: '👥', color: '#ff9800' },
     ] : []),
-    ...(stats.scope === 'GLOBAL' || stats.scope === 'DEPARTMENT' ? [
-      { label: 'Departments',  value: stats.totalDepartments ?? 0,         icon: '🏢', color: '#9c27b0' },
+    ...((stats.scope === 'GLOBAL' || stats.scope === 'DEPARTMENT') && stats.totalDepartments !== undefined ? [
+      { label: 'Departments', value: stats.totalDepartments ?? 0, icon: '🏢', color: '#9c27b0' },
     ] : []),
-    ...(stats.totalUnits !== undefined ? [
-      { label: 'Units',        value: stats.totalUnits ?? 0,               icon: '🔷', color: '#00bcd4' },
+    ...(stats.totalUnits !== undefined && stats.scope !== 'MEMBER' ? [
+      { label: 'Units', value: stats.totalUnits ?? 0, icon: '🔷', color: '#00bcd4' },
     ] : []),
   ] : [];
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '8px' }}>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '32px' }}>
         <div>
           <h1 className="section-title" style={{ textAlign: 'left', marginBottom: '4px' }}>📊 Dashboard</h1>
           <p className="page-description" style={{ textAlign: 'left', margin: 0 }}>{scopeLabel}</p>
@@ -100,8 +129,6 @@ const DashboardPage = ({ user }) => {
           <span style={{ fontSize: '13px', fontWeight: '700', color: roleCfg.color }}>{roleCfg.label}</span>
         </div>
       </div>
-
-      <div style={{ marginBottom: '32px' }} />
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: '#666', fontSize: '20px' }}>⏳ Loading dashboard…</div>
@@ -116,12 +143,8 @@ const DashboardPage = ({ user }) => {
         <>
           {/* Stats Grid */}
           <div className="stats-grid">
-            {statCards.map((stat, index) => (
-              <div key={index} className="hover-card" style={{
-                padding: '25px', backgroundColor: 'white', borderRadius: '12px',
-                boxShadow: '0 2px 10px rgba(0,0,0,0.1)', borderTop: `4px solid ${stat.color}`,
-                animation: `fadeIn 0.5s ease-out ${index * 0.1}s both`
-              }}>
+            {statCards.map((stat, i) => (
+              <div key={i} className="hover-card" style={{ padding: '25px', backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)', borderTop: `4px solid ${stat.color}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontSize: '30px', fontWeight: 'bold', color: '#333', marginBottom: '5px' }}>{stat.value}</div>
@@ -135,34 +158,53 @@ const DashboardPage = ({ user }) => {
             ))}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px', marginTop: '40px' }}>
+          {/* Open file error */}
+          {openError && (
+            <div style={{ marginTop: '16px', padding: '12px 16px', backgroundColor: '#ffeaea', borderRadius: '8px', color: '#c62828', fontSize: '13px', display: 'flex', justifyContent: 'space-between' }}>
+              ❌ {openError}
+              <button onClick={() => setOpenError('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c62828', fontSize: '16px' }}>✕</button>
+            </div>
+          )}
+
+          {/* Main grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px', marginTop: '30px' }}>
+
             {/* Recent Files */}
             <div className="page-card">
-              <h3>📁 Recent Files</h3>
-              {(!stats.recentUploads || stats.recentUploads.length === 0) ? (
+              <h3 style={{ marginBottom: '16px' }}>📁 Recent Files</h3>
+              {!stats.recentUploads || stats.recentUploads.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: '#aaa' }}>
                   <div style={{ fontSize: '40px', marginBottom: '10px' }}>📂</div>
                   <div>No files uploaded yet.</div>
+                  {stats.scope !== 'MEMBER' && (
+                    <div style={{ fontSize: '12px', marginTop: '8px', color: '#bbb' }}>Files uploaded by your team will appear here.</div>
+                  )}
                 </div>
               ) : (
-                <div className="recent-uploads" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                  {stats.recentUploads.map((file, index) => (
-                    <div key={file.fileId || index} className="table-row" style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', marginBottom: '10px',
-                      borderLeft: `4px solid ${index === 0 ? '#0066ff' : '#ddd'}`
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '15px', minWidth: 0 }}>
-                        <span style={{ fontSize: '24px', flexShrink: 0 }}>📄</span>
+                <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                  {stats.recentUploads.map((file, i) => (
+                    <div key={file.fileId || i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '12px 14px', backgroundColor: '#f8f9fa', borderRadius: '8px', marginBottom: '10px', borderLeft: `4px solid ${i === 0 ? '#0066ff' : '#ddd'}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                        <span style={{ fontSize: '22px', flexShrink: 0 }}>{getFileIcon(file.fileType)}</span>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: '600', color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontWeight: '600', color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '14px' }}>
                             {file.originalName || file.fileName}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#666' }}>
-                            {timeAgo(file.uploadDate)} • {formatBytes(file.fileSize)} • {file.userEmail || 'You'}
+                          <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>
+                            {timeAgo(file.uploadDate)} · {formatBytes(file.fileSize)}
+                            {file.userEmail && file.userEmail !== user?.email && (
+                              <span style={{ marginLeft: '6px' }}>· {file.userEmail}</span>
+                            )}
                           </div>
                         </div>
                       </div>
+                      <button
+                        onClick={() => handleOpenFile(file)}
+                        disabled={openingFile === file.fileId}
+                        style={{ padding: '6px 14px', backgroundColor: openingFile === file.fileId ? '#aaa' : '#0066ff', color: 'white', border: 'none', borderRadius: '6px', cursor: openingFile === file.fileId ? 'default' : 'pointer', fontSize: '12px', fontWeight: '600', flexShrink: 0, whiteSpace: 'nowrap' }}
+                      >
+                        {openingFile === file.fileId ? '⏳' : '👁️ Open'}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -171,33 +213,32 @@ const DashboardPage = ({ user }) => {
 
             {/* Recent Activity */}
             <div className="page-card">
-              <h3>📝 Recent Activity</h3>
-              {(!stats.recentActivity || stats.recentActivity.length === 0) ? (
+              <h3 style={{ marginBottom: '16px' }}>📝 Recent Activity</h3>
+              {!stats.recentActivity || stats.recentActivity.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: '#aaa' }}>
                   <div style={{ fontSize: '40px', marginBottom: '10px' }}>📭</div>
                   <div>No recent activity.</div>
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {stats.recentActivity.map((act, index) => {
-                    const { icon, label } = formatActivity(act);
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '420px', overflowY: 'auto' }}>
+                  {stats.recentActivity.map((act, i) => {
+                    const icon = ACTION_ICONS[act.action] || '📌';
+                    const label = (act.action || '').replace(/_/g, ' ').toLowerCase();
                     const isYou = act.email === user?.email;
                     return (
-                      <div key={index} className="table-row" style={{ padding: '14px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                          <div style={{
-                            width: '34px', height: '34px', borderRadius: '50%',
-                            backgroundColor: isYou ? '#0066ff' : '#4caf50', color: 'white',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0
-                          }}>{icon}</div>
+                      <div key={i} style={{ padding: '12px 14px', backgroundColor: '#f8f9fa', borderRadius: '8px', borderLeft: `3px solid ${isYou ? '#0066ff' : '#4caf50'}` }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isYou ? '#0066ff' : '#4caf50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', flexShrink: 0 }}>
+                            {icon}
+                          </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: '500', color: '#333', fontSize: '13px' }}>
-                              <span style={{ color: '#0066ff' }}>{isYou ? 'You' : act.email}</span>{' '}
-                              <span style={{ color: '#666' }}>{label}</span>{' '}
-                              {act.target && <span style={{ color: '#333', fontWeight: '600' }}>{act.target}</span>}
+                            <div style={{ fontSize: '13px', color: '#333' }}>
+                              <span style={{ fontWeight: '700', color: isYou ? '#0066ff' : '#4caf50' }}>{isYou ? 'You' : act.email?.split('@')[0]}</span>
+                              {' '}<span style={{ color: '#666' }}>{label}</span>
+                              {act.target && <span style={{ fontWeight: '600', color: '#333' }}> {act.target}</span>}
                             </div>
-                            <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
-                              {timeAgo(act.createdAt) || (act.timestamp ? timeAgo(new Date(act.timestamp).toISOString()) : '')}
+                            <div style={{ fontSize: '11px', color: '#999', marginTop: '3px' }}>
+                              {act.createdAt ? timeAgo(act.createdAt) : act.timestamp ? timeAgo(new Date(act.timestamp).toISOString()) : ''}
                             </div>
                           </div>
                         </div>

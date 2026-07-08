@@ -80,6 +80,9 @@ class ApiService {
   getDepartmentFiles(dept)          { return this.request(`/files/department/${dept}`); }
   getAllFiles()                      { return this.request('/files/all'); }
   deleteFileMetadata(userId, fileId){ return this.request(`/files/metadata/${userId}/${fileId}`, { method: 'DELETE' }); }
+  openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
+  openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
+  downloadFile(userId, fileId)      { return this.request(`/files/download/${userId}/${fileId}`); }
 
   // ── ACTIVITIES ─────────────────────────────────────────────────────────────
   getActivities() { return this.request('/activities'); }

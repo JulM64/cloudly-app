@@ -11,7 +11,7 @@ import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
-import AdminPage from './pages/AdminPage';
+import AdminPanel from './pages/AdminPanel';
 import DepartmentPage from './pages/DepartmentPage';
 import RoleRequestsPage from './pages/RoleRequestsPage';
 
@@ -28,6 +28,11 @@ function App() {
       if (savedUser) {
         try {
           const userData = JSON.parse(savedUser);
+          // Ensure role always defaults to MEMBER if missing (never undefined)
+          if (!userData.role || !['SUPER_ADMIN','DEPT_HEAD','UNIT_HEAD','MEMBER'].includes(userData.role)) {
+            userData.role = 'MEMBER';
+            localStorage.setItem('cloudly_user', JSON.stringify(userData));
+          }
           await cognitoService.getCurrentUser();
           if (userData.idToken) await s3Service.initialize(userData.idToken);
           setCurrentUser(userData);
@@ -185,7 +190,7 @@ function App() {
             <Route path="/role-requests" element={<RoleRequestsRoute><RoleRequestsPage user={currentUser} /></RoleRequestsRoute>} />
 
             {/* Admin only */}
-            <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+            <Route path="/admin" element={<AdminRoute><AdminPanel user={currentUser} /></AdminRoute>} />
           </Routes>
         </main>
 

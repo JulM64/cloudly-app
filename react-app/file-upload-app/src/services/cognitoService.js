@@ -150,13 +150,15 @@ class CognitoAuthService {
   // ── Build user data object (shared by signIn + completeNewPassword) ───────
   _buildUserData(attrs, groups, session) {
     const customRole = attrs['custom:role'] || null;
-    const role       = this.determineRole(groups, customRole);
+    const role = this.determineRole(groups, customRole);
+    // Safety net — never allow undefined/null role
+    const safeRole = ['SUPER_ADMIN','DEPT_HEAD','UNIT_HEAD','MEMBER'].includes(role) ? role : 'MEMBER';
 
     console.log('👤 Building user data:');
     console.log('   Email:', attrs.email);
     console.log('   Groups:', groups);
     console.log('   custom:role:', customRole);
-    console.log('   → Final role:', role);
+    console.log('   → Final role:', safeRole);
     console.log('   Department:', attrs['custom:department']);
 
     return {
@@ -164,7 +166,7 @@ class CognitoAuthService {
       firstName:    attrs.given_name || attrs.email,
       lastName:     attrs.family_name || '',
       department:   attrs['custom:department'] || '',
-      role:         role,
+      role:         safeRole,
       userId:       attrs.sub,
       groups:       groups,
       initials:     this.getInitials(attrs.given_name, attrs.family_name),
