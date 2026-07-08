@@ -204,6 +204,39 @@ class CognitoAuthService {
     });
   }
 
+  // ── Update User Attributes ────────────────────────────────────────────────
+  updateUserAttributes(attributes) {
+    return new Promise((resolve, reject) => {
+      const cognitoUser = userPool.getCurrentUser();
+      if (!cognitoUser) { reject(new Error('No user logged in')); return; }
+      cognitoUser.getSession((err, session) => {
+        if (err) { reject(err); return; }
+        const attributeList = Object.keys(attributes).map(
+          (key) => new CognitoUserAttribute({ Name: key, Value: attributes[key] })
+        );
+        cognitoUser.updateAttributes(attributeList, (err, result) => {
+          if (err) { reject(err); return; }
+          // Keep localStorage in sync so UI reflects new name immediately
+          try {
+            const stored = JSON.parse(localStorage.getItem('cloudly_user') || '{}');
+            if (attributes.given_name)  stored.firstName = attributes.given_name;
+            if (attributes.family_name) stored.lastName  = attributes.family_name;
+            if (attributes.given_name || attributes.family_name) {
+              stored.initials = this.getInitials(
+                attributes.given_name  || stored.firstName,
+                attributes.family_name || stored.lastName
+              );
+            }
+            localStorage.setItem('cloudly_user', JSON.stringify(stored));
+          } catch (e) {
+            console.warn('Could not sync localStorage after attribute update', e);
+          }
+          resolve(result);
+        });
+      });
+    });
+  }
+
   // ── Forgot Password ───────────────────────────────────────────────────────
   forgotPassword(email) {
     return new Promise((resolve, reject) => {

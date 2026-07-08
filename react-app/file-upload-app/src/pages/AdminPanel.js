@@ -91,6 +91,15 @@ const AdminPanel = ({ user }) => {
     loadAll();
   }, []);
 
+  // Auto-refetch users whenever admin switches to the Users tab
+  // so name/role/department changes made elsewhere are always up to date.
+  useEffect(() => {
+    if (activeTab === 'users') {
+      loadAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
   const loadAll = async () => {
     try {
       setLoading(true);
