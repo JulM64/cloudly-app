@@ -5,13 +5,18 @@ class ApiService {
   constructor() { this.baseURL = API_URL; }
 
   getAuthToken() {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.includes('idToken')) {
-        const val = localStorage.getItem(key);
-        if (val?.startsWith('eyJ')) return val;
+    // 1. PRIMARY: Always check cloudly_user first (syncs with cognitoService.js)
+    try {
+      const cloudlyUserStr = localStorage.getItem('cloudly_user');
+      if (cloudlyUserStr) {
+        const cloudlyUser = JSON.parse(cloudlyUserStr);
+        if (cloudlyUser.idToken) return cloudlyUser.idToken;
       }
+    } catch (e) {
+      console.warn('Failed to parse cloudly_user token', e);
     }
+
+    // 2. FALLBACK 1: Look for other known object keys
     for (const key of ['userData','user','authUser','cognitoUser','idToken','accessToken']) {
       const data = localStorage.getItem(key);
       if (data) {
@@ -23,6 +28,16 @@ class ApiService {
         } catch { if (data.startsWith('eyJ')) return data; }
       }
     }
+
+    // 3. FALLBACK 2: Blindly search for any raw key containing 'idToken'
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.includes('idToken')) {
+        const val = localStorage.getItem(key);
+        if (val?.startsWith('eyJ')) return val;
+      }
+    }
+    
     return null;
   }
 
@@ -67,6 +82,11 @@ class ApiService {
     return this.request(`/users/${encodeURIComponent(email)}/department`, { method: 'PUT', body: { department } });
   }
 
+  // ── AVATAR ────────────────────────────────────────────────────────────────
+  getMyAvatar()              { return this.request('/users/avatar/me'); }
+  updateAvatar(imageBase64)  { return this.request('/users/avatar', { method: 'POST', body: { imageBase64 } }); }
+  removeAvatar()             { return this.request('/users/avatar', { method: 'DELETE' }); }
+
   // ── ROLE REQUESTS ──────────────────────────────────────────────────────────
   getRoleRequests()          { return this.request('/role-requests'); }
   getPendingRoleCount()      { return this.request('/role-requests/pending-count'); }
@@ -78,9 +98,8 @@ class ApiService {
   saveFileMetadata(data)            { return this.request('/files/metadata', { method: 'POST', body: data }); }
   getMyFiles()                      { return this.request('/files/my-files'); }
   getDepartmentFiles(dept)          { return this.request(`/files/department/${dept}`); }
-  getAllFiles()                      { return this.request('/files/all'); }
+  getAllFiles()                     { return this.request('/files/all'); }
   deleteFileMetadata(userId, fileId){ return this.request(`/files/metadata/${userId}/${fileId}`, { method: 'DELETE' }); }
-  openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
   openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
   downloadFile(userId, fileId)      { return this.request(`/files/download/${userId}/${fileId}`); }
 

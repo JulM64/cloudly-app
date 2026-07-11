@@ -1,6 +1,8 @@
-// src/pages/SettingsPage.js - COMPLETE VERSION with real functionality
-import React, { useState, useEffect } from 'react';
+// src/pages/SettingsPage.js - COMPLETE VERSION with real functionality + Avatar upload
+import React, { useState, useEffect, useRef } from 'react';
 import cognitoService from '../services/cognitoService';
+import apiService from '../services/apiService';
+import Avatar from '../components/Avatar';
 
 const TABS = [
   { key: 'profile', label: '👤 Profile' },
@@ -16,6 +18,34 @@ const DEFAULT_NOTIFICATIONS = {
   emailDigest: true,
 };
 
+// ---------- Image resize helper (client-side, before upload) ----------
+const resizeImage = (file, maxSize = 300, quality = 0.85) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxSize) { height *= maxSize / width; width = maxSize; }
+        } else {
+          if (height > maxSize) { width *= maxSize / height; height = maxSize; }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
 const SettingsPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('profile');
 
@@ -29,6 +59,12 @@ const SettingsPage = ({ user }) => {
   });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState(null);
+
+  // ---------- Avatar ----------
+  const [avatar, setAvatar] = useState(null);
+  const [avatarLoading, setAvatarLoading] = useState(false);
+  const [avatarMessage, setAvatarMessage] = useState(null);
+  const fileInputRef = useRef(null);
 
   // ---------- Security ----------
   const [passwordForm, setPasswordForm] = useState({
@@ -61,6 +97,18 @@ const SettingsPage = ({ user }) => {
     }
   }, []);
 
+  // Load avatar fresh from backend on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiService.getMyAvatar();
+        if (res.avatarBase64) setAvatar(res.avatarBase64);
+      } catch (e) {
+        console.warn('Could not load avatar', e);
+      }
+    })();
+  }, []);
+
   // ---------- Handlers ----------
   const handleProfileChange = (field, value) => {
     setProfile((prev) => ({ ...prev, [field]: value }));
@@ -81,6 +129,68 @@ const SettingsPage = ({ user }) => {
     } finally {
       setProfileSaving(false);
       setTimeout(() => setProfileMessage(null), 4000);
+    }
+  };
+
+  // ---------- Avatar Handlers ----------
+  const handleAvatarClick = () => fileInputRef.current?.click();
+
+  const handleAvatarFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setAvatarMessage({ type: 'error', text: '❌ Please select an image file.' });
+      return;
+    }
+
+    setAvatarLoading(true);
+    setAvatarMessage(null);
+    try {
+      const resizedBase64 = await resizeImage(file);
+      const res = await apiService.updateAvatar(resizedBase64);
+      setAvatar(res.avatarBase64);
+      setAvatarMessage({ type: 'success', text: '✅ Profile picture updated!' });
+
+      // Sync to localStorage so Header/Nav picks it up immediately
+      try {
+        const stored = JSON.parse(localStorage.getItem('cloudly_user') || '{}');
+        stored.avatar = res.avatarBase64;
+        localStorage.setItem('cloudly_user', JSON.stringify(stored));
+      } catch {}
+
+      // Notify Navigation (same tab) to update instantly without refresh
+      window.dispatchEvent(new CustomEvent('cloudly-avatar-updated', { detail: { avatar: res.avatarBase64 } }));
+    } catch (err) {
+      setAvatarMessage({ type: 'error', text: `❌ ${err.message || 'Failed to upload picture.'}` });
+    } finally {
+      setAvatarLoading(false);
+      e.target.value = '';
+      setTimeout(() => setAvatarMessage(null), 4000);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    setAvatarLoading(true);
+    setAvatarMessage(null);
+    try {
+      await apiService.removeAvatar();
+      setAvatar(null);
+      setAvatarMessage({ type: 'success', text: '☑️ Profile picture removed.' });
+
+      try {
+        const stored = JSON.parse(localStorage.getItem('cloudly_user') || '{}');
+        delete stored.avatar;
+        localStorage.setItem('cloudly_user', JSON.stringify(stored));
+      } catch {}
+
+      // Notify Navigation (same tab) to update instantly without refresh
+      window.dispatchEvent(new CustomEvent('cloudly-avatar-updated', { detail: { avatar: null } }));
+    } catch (err) {
+      setAvatarMessage({ type: 'error', text: `❌ ${err.message || 'Failed to remove picture.'}` });
+    } finally {
+      setAvatarLoading(false);
+      setTimeout(() => setAvatarMessage(null), 4000);
     }
   };
 
@@ -161,6 +271,11 @@ const SettingsPage = ({ user }) => {
     color: type === 'success' ? '#1e7e34' : '#c62828',
   });
 
+  const displayName =
+    `${profile.firstName || ''} ${profile.lastName || ''}`.trim() ||
+    profile.email ||
+    'User';
+
   return (
     <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
       <h1 className="section-title" style={{ textAlign: 'left' }}>⚙️ Settings</h1>
@@ -195,6 +310,85 @@ const SettingsPage = ({ user }) => {
         {activeTab === 'profile' && (
           <div>
             <h3>👤 Profile Information</h3>
+
+            {/* ---------- Avatar Section ---------- */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '20px',
+                marginBottom: '30px',
+                paddingBottom: '24px',
+                borderBottom: '1px solid #eee',
+              }}
+            >
+              <Avatar
+                src={avatar}
+                name={displayName}
+                email={profile.email}
+                size={90}
+                onClick={handleAvatarClick}
+                loading={avatarLoading}
+                style={{ cursor: 'pointer' }}
+              />
+
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '15px', marginBottom: '6px' }}>
+                  Profile Picture
+                </div>
+
+                {avatarMessage && (
+                  <div
+                    style={{
+                      fontSize: '13px',
+                      marginBottom: '8px',
+                      color: avatarMessage.type === 'success' ? '#1e7e34' : '#c62828',
+                    }}
+                  >
+                    {avatarMessage.text}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    className="btn-3d"
+                    onClick={handleAvatarClick}
+                    disabled={avatarLoading}
+                    style={{ padding: '8px 16px', fontSize: '13px' }}
+                  >
+                    📷 {avatar ? 'Change Photo' : 'Upload Photo'}
+                  </button>
+
+                  {avatar && (
+                    <button
+                      onClick={handleRemoveAvatar}
+                      disabled={avatarLoading}
+                      style={{
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        backgroundColor: '#f5f5f5',
+                        color: '#c62828',
+                        border: '1px solid #ddd',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontWeight: '600',
+                      }}
+                    >
+                      🗑️ Remove
+                    </button>
+                  )}
+                </div>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarFileChange}
+                  style={{ display: 'none' }}
+                />
+              </div>
+            </div>
+
             {profileMessage && <div style={messageStyle(profileMessage.type)}>{profileMessage.text}</div>}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import apiService from '../services/apiService';
+import Avatar from '../components/Avatar';
 
 const ROLE_CONFIG = {
   SUPER_ADMIN: { label: 'Super Admin', color: '#9c27b0', bg: '#f3e5f5', icon: '👑' },
@@ -90,15 +91,6 @@ const AdminPanel = ({ user }) => {
   useEffect(() => {
     loadAll();
   }, []);
-
-  // Auto-refetch users whenever admin switches to the Users tab
-  // so name/role/department changes made elsewhere are always up to date.
-  useEffect(() => {
-    if (activeTab === 'users') {
-      loadAll();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
 
   const loadAll = async () => {
     try {
@@ -275,9 +267,13 @@ const AdminPanel = ({ user }) => {
                           <tr key={u.email} style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: i % 2 === 0 ? 'white' : '#fafafa' }}>
                             <td style={{ padding: '12px 14px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: ROLE_CONFIG[u.role||'MEMBER']?.color || '#0066ff', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: '700', flexShrink: 0 }}>
-                                  {(u.name||u.email)[0].toUpperCase()}
-                                </div>
+                                <Avatar
+                                  src={u.avatarBase64}
+                                  name={u.name}
+                                  email={u.email}
+                                  size={36}
+                                  style={{ border: `2px solid ${ROLE_CONFIG[u.role||'MEMBER']?.color || '#0066ff'}` }}
+                                />
                                 <div style={{ fontWeight: '600', fontSize: '14px' }}>{u.name || '—'}</div>
                               </div>
                             </td>

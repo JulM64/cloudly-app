@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import apiService from '../services/apiService';
+import Avatar from './Avatar';
 
 const ROLE_CONFIG = {
   SUPER_ADMIN: { label: 'Super Admin', color: '#9c27b0', icon: '👑' },
@@ -14,6 +15,29 @@ const Navigation = ({ currentUser, signOut }) => {
   const location  = useLocation();
   const navigate  = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
+
+  // ── Live avatar state — source of truth is the BACKEND, not localStorage ──
+  const [avatar, setAvatar] = useState(null);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    // Always fetch fresh avatar from backend on mount / when user changes
+    (async () => {
+      try {
+        const res = await apiService.getMyAvatar();
+        setAvatar(res.avatarBase64 || null);
+      } catch (e) {
+        console.warn('Could not load avatar for nav', e);
+      }
+    })();
+
+    // Listen for live avatar updates dispatched from SettingsPage (same-tab, instant)
+    const handleAvatarUpdate = (e) => {
+      setAvatar(e.detail?.avatar || null);
+    };
+    window.addEventListener('cloudly-avatar-updated', handleAvatarUpdate);
+    return () => window.removeEventListener('cloudly-avatar-updated', handleAvatarUpdate);
+  }, [currentUser]);
 
   const isAdmin    = currentUser?.role === 'SUPER_ADMIN';
   const isDeptHead = currentUser?.role === 'DEPT_HEAD';
@@ -96,9 +120,13 @@ const Navigation = ({ currentUser, signOut }) => {
 
             {/* User info */}
             <div className="user-menu" style={{ marginLeft: '8px' }}>
-              <div className="user-avatar" style={{ backgroundColor: roleCfg.color }}>
-                {currentUser.initials || currentUser.firstName?.[0] || 'U'}
-              </div>
+              <Avatar
+                src={avatar}
+                name={currentUser.firstName ? `${currentUser.firstName} ${currentUser.lastName || ''}`.trim() : currentUser.email}
+                email={currentUser.email}
+                size={40}
+                style={{ border: `2px solid ${roleCfg.color}` }}
+              />
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: '14px', fontWeight: '600', color: '#333' }}>
                   {currentUser.firstName}

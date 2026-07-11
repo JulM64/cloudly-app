@@ -14,8 +14,8 @@ AWS.config.update({
 });
 
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
-const s3       = new AWS.S3();
-const cognito  = new AWS.CognitoIdentityServiceProvider({ region: process.env.AWS_REGION || 'us-east-1' });
+const s3 = new AWS.S3();
+const cognito = new AWS.CognitoIdentityServiceProvider({ region: process.env.AWS_REGION || 'us-east-1' });
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -25,7 +25,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 
 // ── TOKEN VERIFICATION ────────────────────────────────────────────────────────
 function verifyCognitoToken(req, res, next) {
@@ -38,15 +38,15 @@ function verifyCognitoToken(req, res, next) {
     const customRole = decoded.payload['custom:role'];
     let role = 'MEMBER';
     if (groups.includes('Administrators')) role = 'SUPER_ADMIN';
-    else if (['DEPT_HEAD','UNIT_HEAD','MEMBER'].includes(customRole)) role = customRole;
+    else if (['DEPT_HEAD', 'UNIT_HEAD', 'MEMBER'].includes(customRole)) role = customRole;
     req.user = {
-      userId:     decoded.payload.sub,
-      email:      decoded.payload.email,
+      userId: decoded.payload.sub,
+      email: decoded.payload.email,
       groups,
       department: decoded.payload['custom:department'] || '',
       role,
-      isAdmin:    role === 'SUPER_ADMIN',
-      firstName:  decoded.payload.given_name || 'User'
+      isAdmin: role === 'SUPER_ADMIN',
+      firstName: decoded.payload.given_name || 'User'
     };
     next();
   } catch (err) {
@@ -60,7 +60,7 @@ function requireAdmin(req, res, next) {
 }
 
 function requireHeadOrAdmin(req, res, next) {
-  if (!['SUPER_ADMIN','DEPT_HEAD','UNIT_HEAD'].includes(req.user.role))
+  if (!['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'].includes(req.user.role))
     return res.status(403).json({ error: 'Head or Admin privileges required' });
   next();
 }
@@ -79,11 +79,11 @@ async function logActivity(userId, email, action, target, details = {}) {
 async function getScopedDepts(user, allDepts) {
   const ud = (user.department || '').toLowerCase().trim();
   if (user.role === 'DEPT_HEAD') {
-    const myDept = allDepts.find(d => (d.name||'').toLowerCase().trim() === ud && (!d.type || d.type === 'department'));
-    return myDept ? allDepts.filter(d => d.id === myDept.id || d.parentId === myDept.id) : allDepts.filter(d => (d.name||'').toLowerCase().trim() === ud);
+    const myDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === ud && (!d.type || d.type === 'department'));
+    return myDept ? allDepts.filter(d => d.id === myDept.id || d.parentId === myDept.id) : allDepts.filter(d => (d.name || '').toLowerCase().trim() === ud);
   }
   if (user.role === 'UNIT_HEAD') {
-    return allDepts.filter(d => (d.name||'').toLowerCase().trim() === ud);
+    return allDepts.filter(d => (d.name || '').toLowerCase().trim() === ud);
   }
   return allDepts; // SUPER_ADMIN
 }
@@ -98,11 +98,11 @@ function getScopedEmails(user, scopedDepts) {
 
 // ── Helper: filter files by scoped depts ─────────────────────────────────────
 function filterFilesByScope(allFiles, scopedDepts, scopedEmails) {
-  const deptNames = new Set(scopedDepts.map(d => (d.name||'').toLowerCase().trim()));
-  const bucketNames = new Set(scopedDepts.map(d => (d.s3Bucket||'').toLowerCase()));
+  const deptNames = new Set(scopedDepts.map(d => (d.name || '').toLowerCase().trim()));
+  const bucketNames = new Set(scopedDepts.map(d => (d.s3Bucket || '').toLowerCase()));
   return allFiles.filter(f => {
-    if (deptNames.has((f.department||'').toLowerCase().trim())) return true;
-    if (bucketNames.has((f.s3Bucket||'').toLowerCase())) return true;
+    if (deptNames.has((f.department || '').toLowerCase().trim())) return true;
+    if (bucketNames.has((f.s3Bucket || '').toLowerCase())) return true;
     if (scopedEmails.has(f.userEmail)) return true;
     return false;
   });
@@ -110,7 +110,7 @@ function filterFilesByScope(allFiles, scopedDepts, scopedEmails) {
 
 // ── HEALTH / TEST ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
-app.get('/api/test',   (req, res) => res.json({ success: true, message: '✅ Backend working!', timestamp: new Date().toISOString() }));
+app.get('/api/test', (req, res) => res.json({ success: true, message: '✅ Backend working!', timestamp: new Date().toISOString() }));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // USERS ROUTES
@@ -119,15 +119,30 @@ app.get('/api/test',   (req, res) => res.json({ success: true, message: '✅ Bac
 app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const result = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise();
+
+    // Fetch all avatar profiles in one scan, build a lookup by userId (Cognito sub)
+    let avatarMap = {};
+    try {
+      const profilesResult = await dynamoDB.scan({ TableName: 'cloudly-user-profiles' }).promise();
+      (profilesResult.Items || []).forEach(p => {
+        if (p.userId) avatarMap[p.userId] = p.avatarBase64;
+      });
+    } catch (e) {
+      console.warn('Could not fetch avatar profiles:', e.message);
+    }
+
     const users = (result.Users || []).map(u => {
       const attr = n => (u.Attributes || []).find(a => a.Name === n)?.Value || '';
+      const userId = attr('sub');
       return {
-        email:      attr('email'),
-        name:       `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
+        userId,
+        email: attr('email'),
+        name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
         department: attr('custom:department'),
-        role:       attr('custom:role') || 'MEMBER',
-        status:     u.UserStatus,
-        username:   u.Username
+        role: attr('custom:role') || 'MEMBER',
+        status: u.UserStatus,
+        username: u.Username,
+        avatarBase64: avatarMap[userId] || null
       };
     });
     res.json({ users });
@@ -153,7 +168,7 @@ app.put('/api/users/:email/department', verifyCognitoToken, requireAdmin, async 
     const allDepts = deptResult.Items || [];
     const targetLower = (department || '').toLowerCase().trim();
     const others = allDepts.filter(d =>
-      (d.name||'').toLowerCase().trim() !== targetLower &&
+      (d.name || '').toLowerCase().trim() !== targetLower &&
       Array.isArray(d.membersList) && d.membersList.some(m => m.email === email)
     );
     for (const d of others) {
@@ -185,12 +200,12 @@ app.post('/api/users/create', verifyCognitoToken, requireAdmin, async (req, res)
       TemporaryPassword: tempPassword,
       DesiredDeliveryMediums: ['EMAIL'],
       UserAttributes: [
-        { Name: 'email',             Value: email },
-        { Name: 'email_verified',    Value: 'true' },
-        { Name: 'given_name',        Value: firstName },
-        { Name: 'family_name',       Value: lastName || '' },
+        { Name: 'email', Value: email },
+        { Name: 'email_verified', Value: 'true' },
+        { Name: 'given_name', Value: firstName },
+        { Name: 'family_name', Value: lastName || '' },
         { Name: 'custom:department', Value: department || '' },
-        { Name: 'custom:role',       Value: role || 'MEMBER' },
+        { Name: 'custom:role', Value: role || 'MEMBER' },
       ]
     }).promise();
     await logActivity(req.user.userId, req.user.email, 'CREATE_USER', email, { department, role });
@@ -202,6 +217,61 @@ app.post('/api/users/create', verifyCognitoToken, requireAdmin, async (req, res)
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// AVATAR ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.post('/api/users/avatar', verifyCognitoToken, async (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+    if (!imageBase64 || !imageBase64.startsWith('data:image/')) {
+      return res.status(400).json({ error: 'Valid base64 image required' });
+    }
+    const approxBytes = (imageBase64.length * 3) / 4;
+    if (approxBytes > 400000) {
+      return res.status(400).json({ error: 'Image too large. Please use a smaller image.' });
+    }
+    await dynamoDB.put({
+      TableName: 'cloudly-user-profiles',
+      Item: {
+        userId: req.user.userId,
+        email: req.user.email,
+        avatarBase64: imageBase64,
+        updatedAt: new Date().toISOString()
+      }
+    }).promise();
+    await logActivity(req.user.userId, req.user.email, 'UPDATE_AVATAR', req.user.email, {});
+    res.json({ message: 'Avatar updated successfully', avatarBase64: imageBase64 });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update avatar: ' + err.message });
+  }
+});
+
+app.get('/api/users/avatar/me', verifyCognitoToken, async (req, res) => {
+  try {
+    const result = await dynamoDB.get({
+      TableName: 'cloudly-user-profiles',
+      Key: { userId: req.user.userId }
+    }).promise();
+    res.json({ avatarBase64: result.Item?.avatarBase64 || null });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch avatar: ' + err.message });
+  }
+});
+
+app.delete('/api/users/avatar', verifyCognitoToken, async (req, res) => {
+  try {
+    await dynamoDB.delete({
+      TableName: 'cloudly-user-profiles',
+      Key: { userId: req.user.userId }
+    }).promise();
+    await logActivity(req.user.userId, req.user.email, 'REMOVE_AVATAR', req.user.email, {});
+    res.json({ message: 'Avatar removed' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove avatar: ' + err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ROLE REQUEST ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -209,7 +279,7 @@ app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (re
   try {
     const { targetEmail, targetName, newRole, department, reason } = req.body;
     if (!targetEmail || !newRole) return res.status(400).json({ error: 'targetEmail and newRole required' });
-    if (!['MEMBER','UNIT_HEAD','DEPT_HEAD'].includes(newRole)) return res.status(400).json({ error: 'Invalid role' });
+    if (!['MEMBER', 'UNIT_HEAD', 'DEPT_HEAD'].includes(newRole)) return res.status(400).json({ error: 'Invalid role' });
     if (req.user.role === 'DEPT_HEAD' && newRole === 'DEPT_HEAD') return res.status(403).json({ error: 'Only SUPER_ADMIN can assign DEPT_HEAD' });
 
     // SUPER_ADMIN: auto-approve immediately
@@ -239,7 +309,7 @@ app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (re
       const targetDeptLower = (department || '').toLowerCase().trim();
 
       // 1) Update target dept: set role in membersList + set as manager if head
-      const targetDept = allDepts.find(d => (d.name||'').toLowerCase().trim() === targetDeptLower);
+      const targetDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === targetDeptLower);
       if (targetDept) {
         const ml = Array.isArray(targetDept.membersList)
           ? targetDept.membersList.map(m => m.email === targetEmail ? { ...m, role: newRole } : m)
@@ -263,7 +333,7 @@ app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (re
 
       // 2) Remove from all OTHER depts membersList
       const otherDepts = allDepts.filter(d =>
-        (d.name||'').toLowerCase().trim() !== targetDeptLower &&
+        (d.name || '').toLowerCase().trim() !== targetDeptLower &&
         Array.isArray(d.membersList) && d.membersList.some(m => m.email === targetEmail)
       );
       for (const od of otherDepts) {
@@ -278,9 +348,9 @@ app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (re
       // 3) Clear manager on depts where this user is stale manager
       const staleDepts = allDepts.filter(d => {
         const emailMatch = d.managerEmail === targetEmail;
-        const nameMatch = !d.managerEmail && (d.manager||'').toLowerCase().trim() === (targetName||'').toLowerCase().trim();
+        const nameMatch = !d.managerEmail && (d.manager || '').toLowerCase().trim() === (targetName || '').toLowerCase().trim();
         if (!emailMatch && !nameMatch) return false;
-        const isTargetDept = (d.name||'').toLowerCase().trim() === targetDeptLower;
+        const isTargetDept = (d.name || '').toLowerCase().trim() === targetDeptLower;
         const requiredRole = d.type === 'unit' ? 'UNIT_HEAD' : 'DEPT_HEAD';
         return !isTargetDept || newRole !== requiredRole;
       });
@@ -424,7 +494,7 @@ app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) 
     } catch (e) {
       if (e.code === 'NotFound' || e.code === 'NoSuchBucket') {
         await s3.createBucket({ Bucket: bucketName, ACL: 'private' }).promise();
-        await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET','PUT','POST','DELETE','HEAD'], AllowedOrigins: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
+        await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'], AllowedOrigins: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
       } else throw e;
     }
     const department = { id: departmentId, name, s3Bucket: bucketName, manager: manager || 'Not assigned', managerEmail: managerEmail || null, description: description || '', type: itemType, parentId: parentId || null, status: 'Active', members: 0, membersList: [], projects: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -442,19 +512,19 @@ app.put('/api/departments/:id', verifyCognitoToken, requireHeadOrAdmin, async (r
     const { name, manager, managerEmail, description, status, members, membersList, projects, type, parentId } = req.body;
     if (req.user.role === 'UNIT_HEAD') {
       const dept = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id } }).promise();
-      if ((dept.Item?.name||'').toLowerCase() !== (req.user.department||'').toLowerCase()) return res.status(403).json({ error: 'You can only update your own unit' });
+      if ((dept.Item?.name || '').toLowerCase() !== (req.user.department || '').toLowerCase()) return res.status(403).json({ error: 'You can only update your own unit' });
     }
     const expr = []; const names = {}; const vals = {};
-    if (name)                       { expr.push('#name = :name');             names['#name'] = 'name';     vals[':name'] = name; }
-    if (manager !== undefined)      { expr.push('manager = :manager');        vals[':manager'] = manager; }
-    if (managerEmail !== undefined) { expr.push('managerEmail = :me');        vals[':me'] = managerEmail; }
-    if (description !== undefined)  { expr.push('description = :description');vals[':description'] = description; }
-    if (status)                     { expr.push('#status = :status');         names['#status'] = 'status'; vals[':status'] = status; }
-    if (members !== undefined)      { expr.push('members = :members');        vals[':members'] = members; }
-    if (membersList !== undefined)  { expr.push('membersList = :membersList');vals[':membersList'] = membersList; }
-    if (projects !== undefined)     { expr.push('projects = :projects');      vals[':projects'] = projects; }
-    if (type !== undefined)         { expr.push('#type = :type');             names['#type'] = 'type';     vals[':type'] = type; }
-    if (parentId !== undefined)     { expr.push('parentId = :parentId');      vals[':parentId'] = parentId; }
+    if (name) { expr.push('#name = :name'); names['#name'] = 'name'; vals[':name'] = name; }
+    if (manager !== undefined) { expr.push('manager = :manager'); vals[':manager'] = manager; }
+    if (managerEmail !== undefined) { expr.push('managerEmail = :me'); vals[':me'] = managerEmail; }
+    if (description !== undefined) { expr.push('description = :description'); vals[':description'] = description; }
+    if (status) { expr.push('#status = :status'); names['#status'] = 'status'; vals[':status'] = status; }
+    if (members !== undefined) { expr.push('members = :members'); vals[':members'] = members; }
+    if (membersList !== undefined) { expr.push('membersList = :membersList'); vals[':membersList'] = membersList; }
+    if (projects !== undefined) { expr.push('projects = :projects'); vals[':projects'] = projects; }
+    if (type !== undefined) { expr.push('#type = :type'); names['#type'] = 'type'; vals[':type'] = type; }
+    if (parentId !== undefined) { expr.push('parentId = :parentId'); vals[':parentId'] = parentId; }
     expr.push('updatedAt = :updatedAt'); vals[':updatedAt'] = new Date().toISOString();
     const params = { TableName: 'cloudly-departments', Key: { id }, UpdateExpression: 'set ' + expr.join(', '), ExpressionAttributeValues: vals, ReturnValues: 'ALL_NEW' };
     if (Object.keys(names).length > 0) params.ExpressionAttributeNames = names;
@@ -521,7 +591,7 @@ app.get('/api/files/open/:userId/:fileId', verifyCognitoToken, async (req, res) 
     // Generate presigned URL valid 15 minutes
     const url = s3.getSignedUrl('getObject', {
       Bucket: file.s3Bucket,
-      Key:    file.s3Key,
+      Key: file.s3Key,
       Expires: 900
     });
     res.json({ url, fileName: file.originalName || file.fileName, fileType: file.fileType });
@@ -605,8 +675,8 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
         dynamoDB.scan({ TableName: 'cloudly-activities' }).promise()
       ]);
       const files = fileResult.Items || [];
-      const acts = (actResult.Items || []).filter(a => a.userId === req.user.userId || a.email === req.user.email).sort((a,b)=>b.timestamp-a.timestamp).slice(0,8);
-      return res.json({ stats: { scope: 'MEMBER', totalFiles: files.length, storageUsed: files.reduce((s,f)=>s+(f.fileSize||0),0), department: req.user.department||'N/A', teamMembers: 0, recentUploads: files.sort((a,b)=>new Date(b.uploadDate)-new Date(a.uploadDate)).slice(0,5), recentActivity: acts } });
+      const acts = (actResult.Items || []).filter(a => a.userId === req.user.userId || a.email === req.user.email).sort((a, b) => b.timestamp - a.timestamp).slice(0, 8);
+      return res.json({ stats: { scope: 'MEMBER', totalFiles: files.length, storageUsed: files.reduce((s, f) => s + (f.fileSize || 0), 0), department: req.user.department || 'N/A', teamMembers: 0, recentUploads: files.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 5), recentActivity: acts } });
     }
 
     // HEAD / ADMIN: scoped
@@ -617,26 +687,28 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
     ]);
     const allDepts = deptResult.Items || [];
     const allFiles = fileResult.Items || [];
-    const allActs  = (actResult.Items || []).sort((a,b)=>b.timestamp-a.timestamp);
+    const allActs = (actResult.Items || []).sort((a, b) => b.timestamp - a.timestamp);
 
-    const scopedDepts  = role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
+    const scopedDepts = role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
     const scopedEmails = getScopedEmails(req.user, scopedDepts);
-    const scopedFiles  = role === 'SUPER_ADMIN' ? allFiles : filterFilesByScope(allFiles, scopedDepts, scopedEmails);
-    const scopedActs   = role === 'SUPER_ADMIN' ? allActs  : allActs.filter(a => scopedEmails.has(a.email));
+    const scopedFiles = role === 'SUPER_ADMIN' ? allFiles : filterFilesByScope(allFiles, scopedDepts, scopedEmails);
+    const scopedActs = role === 'SUPER_ADMIN' ? allActs : allActs.filter(a => scopedEmails.has(a.email));
 
     const scope = role === 'SUPER_ADMIN' ? 'GLOBAL' : role === 'DEPT_HEAD' ? 'DEPARTMENT' : 'UNIT';
 
-    res.json({ stats: {
-      scope,
-      totalFiles:       scopedFiles.length,
-      storageUsed:      scopedFiles.reduce((s,f)=>s+(f.fileSize||0),0),
-      department:       req.user.department || 'N/A',
-      teamMembers:      scopedDepts.reduce((s,d)=>s+(d.members||0),0),
-      totalDepartments: scopedDepts.filter(d=>!d.type||d.type==='department').length,
-      totalUnits:       scopedDepts.filter(d=>d.type==='unit').length,
-      recentUploads:    scopedFiles.sort((a,b)=>new Date(b.uploadDate)-new Date(a.uploadDate)).slice(0,5),
-      recentActivity:   scopedActs.slice(0,8)
-    }});
+    res.json({
+      stats: {
+        scope,
+        totalFiles: scopedFiles.length,
+        storageUsed: scopedFiles.reduce((s, f) => s + (f.fileSize || 0), 0),
+        department: req.user.department || 'N/A',
+        teamMembers: scopedDepts.reduce((s, d) => s + (d.members || 0), 0),
+        totalDepartments: scopedDepts.filter(d => !d.type || d.type === 'department').length,
+        totalUnits: scopedDepts.filter(d => d.type === 'unit').length,
+        recentUploads: scopedFiles.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 5),
+        recentActivity: scopedActs.slice(0, 8)
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch stats: ' + err.message });
   }
@@ -647,16 +719,16 @@ app.get('/api/stats/admin', verifyCognitoToken, requireAdmin, async (req, res) =
     const [deptResult, fileResult, roleReqResult, cognitoResult] = await Promise.all([
       dynamoDB.scan({ TableName: 'cloudly-departments' }).promise(),
       dynamoDB.scan({ TableName: 'cloudly-files' }).promise(),
-      dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise().catch(()=>({Items:[]})),
-      cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise().catch(()=>({Users:[]}))
+      dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise().catch(() => ({ Items: [] })),
+      cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise().catch(() => ({ Users: [] }))
     ]);
-    const departments  = deptResult.Items || [];
-    const files        = fileResult.Items || [];
+    const departments = deptResult.Items || [];
+    const files = fileResult.Items || [];
     const roleRequests = roleReqResult.Items || [];
     const cognitoUsers = cognitoResult.Users || [];
     const roleCounts = { SUPER_ADMIN: 0, DEPT_HEAD: 0, UNIT_HEAD: 0, MEMBER: 0 };
     cognitoUsers.forEach(u => {
-      const r = (u.Attributes||[]).find(a=>a.Name==='custom:role')?.Value || 'MEMBER';
+      const r = (u.Attributes || []).find(a => a.Name === 'custom:role')?.Value || 'MEMBER';
       if (roleCounts[r] !== undefined) roleCounts[r]++; else roleCounts.MEMBER++;
     });
     const departmentStats = {};
@@ -667,7 +739,7 @@ app.get('/api/stats/admin', verifyCognitoToken, requireAdmin, async (req, res) =
         departmentStats[f.department].totalSize += f.fileSize || 0;
       }
     });
-    res.json({ stats: { totalDepartments: departments.filter(d=>!d.type||d.type==='department').length, totalUnits: departments.filter(d=>d.type==='unit').length, activeDepartments: departments.filter(d=>d.status==='Active').length, totalFiles: files.length, storageUsed: files.reduce((s,f)=>s+(f.fileSize||0),0), totalUsers: cognitoUsers.length, roleCounts, pendingRoleRequests: roleRequests.filter(r=>r.status==='PENDING').length, departmentStats } });
+    res.json({ stats: { totalDepartments: departments.filter(d => !d.type || d.type === 'department').length, totalUnits: departments.filter(d => d.type === 'unit').length, activeDepartments: departments.filter(d => d.status === 'Active').length, totalFiles: files.length, storageUsed: files.reduce((s, f) => s + (f.fileSize || 0), 0), totalUsers: cognitoUsers.length, roleCounts, pendingRoleRequests: roleRequests.filter(r => r.status === 'PENDING').length, departmentStats } });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch admin stats: ' + err.message });
   }
@@ -680,6 +752,7 @@ app.listen(PORT, () => {
   console.log('🚀 ============================================');
   console.log('🔐 Roles: SUPER_ADMIN | DEPT_HEAD | UNIT_HEAD | MEMBER');
   console.log('✅ File open endpoint: GET /api/files/open/:userId/:fileId');
+  console.log('👤 Avatar endpoints: POST/GET/DELETE /api/users/avatar');
   console.log('🚀 ============================================\n');
 });
 
