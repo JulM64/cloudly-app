@@ -14,6 +14,7 @@ import SettingsPage from './pages/SettingsPage';
 import AdminPanel from './pages/AdminPanel';
 import DepartmentPage from './pages/DepartmentPage';
 import RoleRequestsPage from './pages/RoleRequestsPage';
+import HeadPanel from './pages/HeadPanel';
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -124,6 +125,14 @@ function App() {
     return children;
   };
 
+  // Team Management route — DEPT_HEAD and UNIT_HEAD only (SUPER_ADMIN already has the full Admin Panel)
+  const TeamRoute = ({ children }) => {
+    if (loading) return <Spinner />;
+    if (!currentUser) return <Navigate to="/login" replace />;
+    if (!['DEPT_HEAD','UNIT_HEAD'].includes(currentUser.role)) return <Navigate to="/" replace />;
+    return children;
+  };
+
   useEffect(() => {
     const createClouds = () => {
       if (document.querySelectorAll('.cloud').length > 0) return;
@@ -188,6 +197,9 @@ function App() {
 
             {/* Role Requests — Admin + DEPT_HEAD */}
             <Route path="/role-requests" element={<RoleRequestsRoute><RoleRequestsPage user={currentUser} /></RoleRequestsRoute>} />
+
+            {/* Team Management — DEPT_HEAD + UNIT_HEAD only */}
+            <Route path="/team" element={<TeamRoute><HeadPanel user={currentUser} /></TeamRoute>} />
 
             {/* Admin only */}
             <Route path="/admin" element={<AdminRoute><AdminPanel user={currentUser} /></AdminRoute>} />

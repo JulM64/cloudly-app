@@ -3,9 +3,21 @@ require('dotenv').config();
 const express = require('express');
 const AWS = require('aws-sdk');
 const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Fail fast if required config is missing, instead of silently misbehaving in prod
+const REQUIRED_ENV = ['AWS_REGION', 'COGNITO_USER_POOL_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missingEnv.length) {
+  console.error('❌ Missing required environment variables:', missingEnv.join(', '));
+  process.exit(1);
+}
 
 AWS.config.update({
   region: process.env.AWS_REGION || 'us-east-1',
@@ -17,41 +29,105 @@ const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const s3 = new AWS.S3();
 const cognito = new AWS.CognitoIdentityServiceProvider({ region: process.env.AWS_REGION || 'us-east-1' });
 
+// ── SECURITY HEADERS ──────────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"], // 'data:' needed for base64 avatars
+      connectSrc: ["'self'"],
+    },
+  },
+}));
+
 // ── CORS ──────────────────────────────────────────────────────────────────────
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+// Only allow your real frontend origin(s) — set FRONTEND_URL in .env for production
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000').split(',').map(o => o.trim());
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}));
+
 app.use(express.json({ limit: '8mb' }));
 
-// ── TOKEN VERIFICATION ────────────────────────────────────────────────────────
+// ── RATE LIMITING ─────────────────────────────────────────────────────────────
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 300,                 // generous default for normal browsing/API use
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+app.use('/api/', generalLimiter);
+
+const sensitiveLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // tighter limit for account-mutating / admin actions
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please slow down and try again later.' },
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10, // avatar/file-metadata writes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many uploads, please slow down.' },
+});
+
+// ── TOKEN VERIFICATION (real JWKS-based verification, not just decode) ────────
+const jwksClientInstance = jwksClient({
+  jwksUri: `https://cognito-idp.${process.env.AWS_REGION}.amazonaws.com/${process.env.COGNITO_USER_POOL_ID}/.well-known/jwks.json`,
+  cache: true,
+  cacheMaxAge: 10 * 60 * 60 * 1000, // 10 hours
+  rateLimit: true,
+});
+
+function getSigningKey(header, callback) {
+  jwksClientInstance.getSigningKey(header.kid, (err, key) => {
+    if (err) return callback(err);
+    callback(null, key.getPublicKey());
+  });
+}
+
 function verifyCognitoToken(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'No token provided' });
-  try {
-    const decoded = jwt.decode(token, { complete: true });
-    if (!decoded?.payload) throw new Error('Invalid token');
-    const groups = decoded.payload['cognito:groups'] || [];
-    const customRole = decoded.payload['custom:role'];
-    let role = 'MEMBER';
-    if (groups.includes('Administrators')) role = 'SUPER_ADMIN';
-    else if (['DEPT_HEAD', 'UNIT_HEAD', 'MEMBER'].includes(customRole)) role = customRole;
-    req.user = {
-      userId: decoded.payload.sub,
-      email: decoded.payload.email,
-      groups,
-      department: decoded.payload['custom:department'] || '',
-      role,
-      isAdmin: role === 'SUPER_ADMIN',
-      firstName: decoded.payload.given_name || 'User'
-    };
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token', details: err.message });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
   }
+  const token = authHeader.slice('Bearer '.length);
+
+  jwt.verify(
+    token,
+    getSigningKey,
+    {
+      algorithms: ['RS256'],
+      issuer: `https://cognito-idp.${process.env.AWS_REGION}.amazonaws.com/${process.env.COGNITO_USER_POOL_ID}`,
+    },
+    (err, decoded) => {
+      if (err) {
+        return res.status(401).json({ error: 'Invalid or expired token', details: err.message });
+      }
+      const groups = decoded['cognito:groups'] || [];
+      const customRole = decoded['custom:role'];
+      let role = 'MEMBER';
+      if (groups.includes('Administrators')) role = 'SUPER_ADMIN';
+      else if (['DEPT_HEAD', 'UNIT_HEAD', 'MEMBER'].includes(customRole)) role = customRole;
+      req.user = {
+        userId: decoded.sub,
+        email: decoded.email,
+        groups,
+        department: decoded['custom:department'] || '',
+        role,
+        isAdmin: role === 'SUPER_ADMIN',
+        firstName: decoded.given_name || 'User'
+      };
+      next();
+    }
+  );
 }
 
 function requireAdmin(req, res, next) {
@@ -63,6 +139,13 @@ function requireHeadOrAdmin(req, res, next) {
   if (!['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'].includes(req.user.role))
     return res.status(403).json({ error: 'Head or Admin privileges required' });
   next();
+}
+
+// ── Helper: escape values dropped into Cognito Filter strings ────────────────
+// Cognito Filter syntax uses double quotes as delimiters; an unescaped email
+// containing a quote (e.g. foo"or"1"="1) could alter the filter expression.
+function escapeCognitoFilter(value) {
+  return String(value || '').replace(/"/g, '\\"');
 }
 
 // ── ACTIVITY LOGGING ──────────────────────────────────────────────────────────
@@ -118,7 +201,10 @@ app.get('/api/test', (req, res) => res.json({ success: true, message: '✅ Backe
 
 app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    const result = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise();
+    const limit = Math.min(parseInt(req.query.limit) || 60, 60); // Cognito's hard max per page is 60
+    const listParams = { UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: limit };
+    if (req.query.lastKey) listParams.PaginationToken = decodeURIComponent(req.query.lastKey);
+    const result = await cognito.listUsers(listParams).promise();
 
     // Fetch all avatar profiles in one scan, build a lookup by userId (Cognito sub)
     let avatarMap = {};
@@ -145,17 +231,72 @@ app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
         avatarBase64: avatarMap[userId] || null
       };
     });
-    res.json({ users });
+    res.json({
+      users,
+      lastKey: result.PaginationToken ? encodeURIComponent(result.PaginationToken) : null,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users: ' + err.message });
   }
 });
 
-app.put('/api/users/:email/department', verifyCognitoToken, requireAdmin, async (req, res) => {
+// Scoped view for Dept/Unit Heads (and Super Admin) — only users in their own department/unit.
+// Cognito's Filter doesn't support filtering by custom attributes, so we page through all
+// users server-side and filter here. Capped at 10 pages (~600 users) as a safety limit —
+// fine for a single department/unit; for very large orgs this would need a proper index.
+app.get('/api/users/team', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const allDepts = deptResult.Items || [];
+    const scopedDepts = await getScopedDepts(req.user, allDepts);
+    const scopedDeptNames = new Set(scopedDepts.map(d => (d.name || '').toLowerCase().trim()));
+
+    let allUsers = [];
+    let paginationToken = null;
+    let pages = 0;
+    do {
+      const params = { UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 };
+      if (paginationToken) params.PaginationToken = paginationToken;
+      const result = await cognito.listUsers(params).promise();
+      allUsers = allUsers.concat(result.Users || []);
+      paginationToken = result.PaginationToken || null;
+      pages++;
+    } while (paginationToken && pages < 10);
+
+    let avatarMap = {};
+    try {
+      const profilesResult = await dynamoDB.scan({ TableName: 'cloudly-user-profiles' }).promise();
+      (profilesResult.Items || []).forEach(p => { if (p.userId) avatarMap[p.userId] = p.avatarBase64; });
+    } catch (e) { /* non-fatal */ }
+
+    const users = allUsers
+      .map(u => {
+        const attr = n => (u.Attributes || []).find(a => a.Name === n)?.Value || '';
+        const userId = attr('sub');
+        return {
+          userId,
+          email: attr('email'),
+          name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
+          department: attr('custom:department'),
+          role: attr('custom:role') || 'MEMBER',
+          status: u.UserStatus,
+          username: u.Username,
+          avatarBase64: avatarMap[userId] || null
+        };
+      })
+      .filter(u => req.user.role === 'SUPER_ADMIN' || scopedDeptNames.has((u.department || '').toLowerCase().trim()));
+
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch team users: ' + err.message });
+  }
+});
+
+app.put('/api/users/:email/department', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { email } = req.params;
     const { department } = req.body;
-    const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${email}"`, Limit: 1 }).promise();
+    const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(email)}"`, Limit: 1 }).promise();
     if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found' });
     await cognito.adminUpdateUserAttributes({
       UserPoolId: process.env.COGNITO_USER_POOL_ID,
@@ -189,7 +330,7 @@ app.put('/api/users/:email/department', verifyCognitoToken, requireAdmin, async 
   }
 });
 
-app.post('/api/users/create', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.post('/api/users/create', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { firstName, lastName, email, department, role } = req.body;
     if (!email || !firstName) return res.status(400).json({ error: 'email and firstName required' });
@@ -220,7 +361,7 @@ app.post('/api/users/create', verifyCognitoToken, requireAdmin, async (req, res)
 // AVATAR ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/users/avatar', verifyCognitoToken, async (req, res) => {
+app.post('/api/users/avatar', uploadLimiter, verifyCognitoToken, async (req, res) => {
   try {
     const { imageBase64 } = req.body;
     if (!imageBase64 || !imageBase64.startsWith('data:image/')) {
@@ -258,7 +399,7 @@ app.get('/api/users/avatar/me', verifyCognitoToken, async (req, res) => {
   }
 });
 
-app.delete('/api/users/avatar', verifyCognitoToken, async (req, res) => {
+app.delete('/api/users/avatar', uploadLimiter, verifyCognitoToken, async (req, res) => {
   try {
     await dynamoDB.delete({
       TableName: 'cloudly-user-profiles',
@@ -275,7 +416,7 @@ app.delete('/api/users/avatar', verifyCognitoToken, async (req, res) => {
 // ROLE REQUEST ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const { targetEmail, targetName, newRole, department, reason } = req.body;
     if (!targetEmail || !newRole) return res.status(400).json({ error: 'targetEmail and newRole required' });
@@ -284,7 +425,7 @@ app.post('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (re
 
     // SUPER_ADMIN: auto-approve immediately
     if (req.user.role === 'SUPER_ADMIN') {
-      const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${targetEmail}"`, Limit: 1 }).promise();
+      const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(targetEmail)}"`, Limit: 1 }).promise();
       if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found in Cognito' });
 
       // Update role in Cognito
@@ -412,14 +553,14 @@ app.get('/api/role-requests/pending-count', verifyCognitoToken, requireHeadOrAdm
   }
 });
 
-app.put('/api/role-requests/:requestId/approve', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.put('/api/role-requests/:requestId/approve', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { requestId } = req.params;
     const result = await dynamoDB.get({ TableName: 'cloudly-role-requests', Key: { requestId } }).promise();
     if (!result.Item) return res.status(404).json({ error: 'Not found' });
     if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
     const rr = result.Item;
-    const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${rr.targetEmail}"`, Limit: 1 }).promise();
+    const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(rr.targetEmail)}"`, Limit: 1 }).promise();
     if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found' });
     await cognito.adminUpdateUserAttributes({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Username: listResult.Users[0].Username, UserAttributes: [{ Name: 'custom:role', Value: rr.newRole }] }).promise();
     await dynamoDB.update({ TableName: 'cloudly-role-requests', Key: { requestId }, UpdateExpression: 'set #s = :s, approvedBy = :ab, approvedAt = :aa, updatedAt = :ua', ExpressionAttributeNames: { '#s': 'status' }, ExpressionAttributeValues: { ':s': 'APPROVED', ':ab': req.user.email, ':aa': new Date().toISOString(), ':ua': new Date().toISOString() } }).promise();
@@ -430,7 +571,7 @@ app.put('/api/role-requests/:requestId/approve', verifyCognitoToken, requireAdmi
   }
 });
 
-app.put('/api/role-requests/:requestId/reject', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.put('/api/role-requests/:requestId/reject', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { requestId } = req.params;
     const { reason } = req.body;
@@ -477,7 +618,7 @@ app.get('/api/departments/hierarchy', verifyCognitoToken, async (req, res) => {
   }
 });
 
-app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.post('/api/departments', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const { name, manager, managerEmail, description, type, parentId } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
@@ -494,7 +635,26 @@ app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) 
     } catch (e) {
       if (e.code === 'NotFound' || e.code === 'NoSuchBucket') {
         await s3.createBucket({ Bucket: bucketName, ACL: 'private' }).promise();
-        await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'], AllowedOrigins: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
+        // Block all public access — this bucket should only ever be reached via
+        // presigned URLs issued by this backend, never browsed directly.
+        await s3.putPublicAccessBlock({
+          Bucket: bucketName,
+          PublicAccessBlockConfiguration: {
+            BlockPublicAcls: true,
+            IgnorePublicAcls: true,
+            BlockPublicPolicy: true,
+            RestrictPublicBuckets: true,
+          },
+        }).promise();
+        // Encrypt everything at rest by default
+        await s3.putBucketEncryption({
+          Bucket: bucketName,
+          ServerSideEncryptionConfiguration: {
+            Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+          },
+        }).promise();
+        // CORS only needs to allow your real frontend origin(s) — not '*'
+        await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'], AllowedOrigins: allowedOrigins, ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
       } else throw e;
     }
     const department = { id: departmentId, name, s3Bucket: bucketName, manager: manager || 'Not assigned', managerEmail: managerEmail || null, description: description || '', type: itemType, parentId: parentId || null, status: 'Active', members: 0, membersList: [], projects: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -506,7 +666,7 @@ app.post('/api/departments', verifyCognitoToken, requireAdmin, async (req, res) 
   }
 });
 
-app.put('/api/departments/:id', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+app.put('/api/departments/:id', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, manager, managerEmail, description, status, members, membersList, projects, type, parentId } = req.body;
@@ -535,7 +695,7 @@ app.put('/api/departments/:id', verifyCognitoToken, requireHeadOrAdmin, async (r
   }
 });
 
-app.delete('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req, res) => {
+app.delete('/api/departments/:id', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     await dynamoDB.delete({ TableName: 'cloudly-departments', Key: { id: req.params.id } }).promise();
     res.json({ message: 'Department deleted' });
@@ -547,6 +707,57 @@ app.delete('/api/departments/:id', verifyCognitoToken, requireAdmin, async (req,
 // ══════════════════════════════════════════════════════════════════════════════
 // FILE ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ── GET UPLOAD URL: presigned POST scoped to the user's own department bucket ─
+const ALLOWED_UPLOAD_MIME_TYPES = [
+  'application/pdf',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain', 'text/csv',
+  'application/zip',
+];
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB — adjust to your needs
+
+app.post('/api/files/upload-url', uploadLimiter, verifyCognitoToken, async (req, res) => {
+  try {
+    const { fileName, fileType } = req.body;
+    if (!fileName || !fileType) return res.status(400).json({ error: 'fileName and fileType required' });
+    if (!ALLOWED_UPLOAD_MIME_TYPES.includes(fileType)) {
+      return res.status(400).json({ error: 'File type not allowed' });
+    }
+
+    // Look up the bucket for the user's OWN department — never let the client pick the bucket
+    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const allDepts = deptResult.Items || [];
+    const myDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === (req.user.department || '').toLowerCase().trim());
+    if (!myDept?.s3Bucket) return res.status(400).json({ error: 'No department bucket found for your account' });
+
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const key = `${req.user.userId}/${Date.now()}_${safeName}`;
+
+    const presigned = await new Promise((resolve, reject) => {
+      s3.createPresignedPost({
+        Bucket: myDept.s3Bucket,
+        Fields: { key, 'Content-Type': fileType },
+        Conditions: [
+          ['content-length-range', 0, MAX_UPLOAD_BYTES],
+          ['eq', '$Content-Type', fileType],
+          ['eq', '$key', key],
+        ],
+        Expires: 300, // 5 minutes to actually perform the upload
+      }, (err, data) => err ? reject(err) : resolve(data));
+    });
+
+    res.json({ ...presigned, bucket: myDept.s3Bucket, key });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate upload URL: ' + err.message });
+  }
+});
 
 app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
@@ -601,6 +812,33 @@ app.get('/api/files/open/:userId/:fileId', verifyCognitoToken, async (req, res) 
   }
 });
 
+app.get('/api/files/team', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const allDepts = deptResult.Items || [];
+    const scopedDepts = req.user.role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
+    const scopedEmails = getScopedEmails(req.user, scopedDepts);
+
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const params = { TableName: 'cloudly-files', Limit: limit };
+    if (req.query.lastKey) {
+      try { params.ExclusiveStartKey = JSON.parse(decodeURIComponent(req.query.lastKey)); }
+      catch { return res.status(400).json({ error: 'Invalid lastKey' }); }
+    }
+    const result = await dynamoDB.scan(params).promise();
+    const scopedFiles = req.user.role === 'SUPER_ADMIN'
+      ? (result.Items || [])
+      : filterFilesByScope(result.Items || [], scopedDepts, scopedEmails);
+
+    res.json({
+      files: scopedFiles,
+      lastKey: result.LastEvaluatedKey ? encodeURIComponent(JSON.stringify(result.LastEvaluatedKey)) : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch team files: ' + err.message });
+  }
+});
+
 app.get('/api/files/department/:department', verifyCognitoToken, async (req, res) => {
   try {
     const { department } = req.params;
@@ -615,8 +853,17 @@ app.get('/api/files/department/:department', verifyCognitoToken, async (req, res
 
 app.get('/api/files/all', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    const result = await dynamoDB.scan({ TableName: 'cloudly-files' }).promise();
-    res.json({ files: result.Items || [] });
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const params = { TableName: 'cloudly-files', Limit: limit };
+    if (req.query.lastKey) {
+      try { params.ExclusiveStartKey = JSON.parse(decodeURIComponent(req.query.lastKey)); }
+      catch { return res.status(400).json({ error: 'Invalid lastKey' }); }
+    }
+    const result = await dynamoDB.scan(params).promise();
+    res.json({
+      files: result.Items || [],
+      lastKey: result.LastEvaluatedKey ? encodeURIComponent(JSON.stringify(result.LastEvaluatedKey)) : null,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch all files: ' + err.message });
   }
@@ -630,6 +877,139 @@ app.delete('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req
     res.json({ message: 'File metadata deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete: ' + err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FILE DELETE REQUESTS (Dept/Unit Heads submit with a reason; Super Admin approves)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Submit a request to delete a file. SUPER_ADMIN should just use the direct
+// DELETE /api/files/metadata route above — this is for DEPT_HEAD/UNIT_HEAD, who
+// can only request removal of files that are actually within their own scope.
+app.post('/api/file-delete-requests', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { userId, fileId, reason } = req.body;
+    if (!userId || !fileId) return res.status(400).json({ error: 'userId and fileId required' });
+    if (!reason || !reason.trim()) return res.status(400).json({ error: 'A reason (motif) is required to request removal' });
+
+    const fileResult = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
+    if (!fileResult.Item) return res.status(404).json({ error: 'File not found' });
+    const file = fileResult.Item;
+
+    // Confirm the requester actually has this file in their own scope — a Unit Head
+    // can't request deletion of a file belonging to a different department.
+    if (req.user.role !== 'SUPER_ADMIN') {
+      const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+      const allDepts = deptResult.Items || [];
+      const scopedDepts = await getScopedDepts(req.user, allDepts);
+      const scopedEmails = getScopedEmails(req.user, scopedDepts);
+      const inScope = filterFilesByScope([file], scopedDepts, scopedEmails).length > 0;
+      if (!inScope) return res.status(403).json({ error: 'This file is outside your department/unit scope' });
+    }
+
+    const requestId = `delreq_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const item = {
+      requestId,
+      fileId,
+      fileUserId: userId,
+      fileName: file.originalName || file.fileName,
+      fileOwnerEmail: file.userEmail || '',
+      department: file.department || req.user.department || '',
+      reason: reason.trim(),
+      requestedBy: req.user.email,
+      requestedByRole: req.user.role,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    };
+    await dynamoDB.put({ TableName: 'cloudly-file-delete-requests', Item: item }).promise();
+    await logActivity(req.user.userId, req.user.email, 'REQUEST_FILE_DELETE', item.fileName, { reason: item.reason });
+    res.json({ message: 'Removal request submitted for admin approval', request: item });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit removal request: ' + err.message });
+  }
+});
+
+// Requests I've personally submitted (Dept/Unit Head checking status of their own requests)
+app.get('/api/file-delete-requests/mine', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
+    const mine = (result.Items || [])
+      .filter(r => r.requestedBy === req.user.email)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ requests: mine });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch your removal requests: ' + err.message });
+  }
+});
+
+// All requests — Super Admin review queue
+app.get('/api/file-delete-requests', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
+    const requests = (result.Items || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ requests });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch removal requests: ' + err.message });
+  }
+});
+
+app.get('/api/file-delete-requests/pending-count', verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
+    const pendingCount = (result.Items || []).filter(r => r.status === 'PENDING').length;
+    res.json({ pendingCount });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch pending count: ' + err.message });
+  }
+});
+
+app.put('/api/file-delete-requests/:requestId/approve', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const result = await dynamoDB.get({ TableName: 'cloudly-file-delete-requests', Key: { requestId } }).promise();
+    if (!result.Item) return res.status(404).json({ error: 'Request not found' });
+    if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
+    const reqItem = result.Item;
+
+    // Actually delete the file metadata now that an admin has approved it
+    await dynamoDB.delete({ TableName: 'cloudly-files', Key: { userId: reqItem.fileUserId, fileId: reqItem.fileId } }).promise();
+
+    await dynamoDB.update({
+      TableName: 'cloudly-file-delete-requests',
+      Key: { requestId },
+      UpdateExpression: 'set #s = :s, resolvedBy = :rb, resolvedAt = :ra',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':s': 'APPROVED', ':rb': req.user.email, ':ra': new Date().toISOString() }
+    }).promise();
+
+    await logActivity(req.user.userId, req.user.email, 'APPROVE_FILE_DELETE', reqItem.fileName, { requestedBy: reqItem.requestedBy, reason: reqItem.reason });
+    res.json({ message: 'Removal approved — file deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve removal: ' + err.message });
+  }
+});
+
+app.put('/api/file-delete-requests/:requestId/reject', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+    const result = await dynamoDB.get({ TableName: 'cloudly-file-delete-requests', Key: { requestId } }).promise();
+    if (!result.Item) return res.status(404).json({ error: 'Request not found' });
+    if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
+
+    await dynamoDB.update({
+      TableName: 'cloudly-file-delete-requests',
+      Key: { requestId },
+      UpdateExpression: 'set #s = :s, resolvedBy = :rb, resolvedAt = :ra, rejectReason = :rr',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':s': 'REJECTED', ':rb': req.user.email, ':ra': new Date().toISOString(), ':rr': reason || '' }
+    }).promise();
+
+    await logActivity(req.user.userId, req.user.email, 'REJECT_FILE_DELETE', result.Item.fileName, { requestedBy: result.Item.requestedBy });
+    res.json({ message: 'Removal request rejected' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reject removal: ' + err.message });
   }
 });
 

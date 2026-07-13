@@ -75,7 +75,12 @@ class ApiService {
   deleteDepartment(id)       { return this.request(`/departments/${id}`, { method: 'DELETE' }); }
 
   // ── USERS ──────────────────────────────────────────────────────────────────
-  getUsers() { return this.request('/users'); }
+  getUsers(lastKey = null, limit = 60) {
+    const params = new URLSearchParams({ limit });
+    if (lastKey) params.set('lastKey', lastKey);
+    return this.request(`/users?${params.toString()}`);
+  }
+  getTeamUsers() { return this.request('/users/team'); }
   createUser(data) { return this.request('/users/create', { method: 'POST', body: data }); }
 
   updateUserDepartment(email, department) {
@@ -94,14 +99,72 @@ class ApiService {
   approveRoleRequest(id)     { return this.request(`/role-requests/${id}/approve`, { method: 'PUT' }); }
   rejectRoleRequest(id, reason) { return this.request(`/role-requests/${id}/reject`, { method: 'PUT', body: { reason } }); }
 
+  // ── FILE DELETE REQUESTS ─────────────────────────────────────────────────────
+  requestFileDelete(userId, fileId, reason) { return this.request('/file-delete-requests', { method: 'POST', body: { userId, fileId, reason } }); }
+  getMyFileDeleteRequests()          { return this.request('/file-delete-requests/mine'); }
+  getFileDeleteRequests()            { return this.request('/file-delete-requests'); }
+  getFileDeletePendingCount()        { return this.request('/file-delete-requests/pending-count'); }
+  approveFileDeleteRequest(id)       { return this.request(`/file-delete-requests/${id}/approve`, { method: 'PUT' }); }
+  rejectFileDeleteRequest(id, reason){ return this.request(`/file-delete-requests/${id}/reject`, { method: 'PUT', body: { reason } }); }
+
   // ── FILES ──────────────────────────────────────────────────────────────────
+  getUploadUrl(fileName, fileType) { return this.request('/files/upload-url', { method: 'POST', body: { fileName, fileType } }); }
   saveFileMetadata(data)            { return this.request('/files/metadata', { method: 'POST', body: data }); }
   getMyFiles()                      { return this.request('/files/my-files'); }
   getDepartmentFiles(dept)          { return this.request(`/files/department/${dept}`); }
-  getAllFiles()                     { return this.request('/files/all'); }
+  getAllFiles(lastKey = null, limit = 50) {
+    const params = new URLSearchParams({ limit });
+    if (lastKey) params.set('lastKey', lastKey);
+    return this.request(`/files/all?${params.toString()}`);
+  }
+  getTeamFiles(lastKey = null, limit = 50) {
+    const params = new URLSearchParams({ limit });
+    if (lastKey) params.set('lastKey', lastKey);
+    return this.request(`/files/team?${params.toString()}`);
+  }
   deleteFileMetadata(userId, fileId){ return this.request(`/files/metadata/${userId}/${fileId}`, { method: 'DELETE' }); }
   openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
   downloadFile(userId, fileId)      { return this.request(`/files/download/${userId}/${fileId}`); }
+
+  /**
+   * Full secure upload flow in one call:
+   * 1. Ask the backend for a presigned POST scoped to the user's own department bucket
+   * 2. Upload the file directly to S3 (bytes never pass through our own server)
+   * 3. Save the resulting file metadata so it shows up in "My Files" / department views
+   *
+   * @param {File} file - the raw File object from an <input type="file"> or drop event
+   * @param {(percent: number) => void} [onProgress] - optional progress callback (0-100)
+   * @returns {Promise<object>} the saved file metadata
+   */
+  async uploadFile(file, onProgress) {
+    const { url, fields, bucket, key } = await this.getUploadUrl(file.name, file.type);
+
+    const formData = new FormData();
+    Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+    formData.append('file', file); // must be appended LAST — S3 ignores fields after this
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+      }
+      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(`S3 upload failed: ${xhr.status}`));
+      xhr.onerror = () => reject(new Error('S3 upload failed: network error'));
+      xhr.send(formData);
+    });
+
+    return this.saveFileMetadata({
+      fileName: key,
+      originalName: file.name,
+      s3Key: key,
+      s3Bucket: bucket,
+      fileSize: file.size,
+      fileType: file.type,
+    });
+  }
 
   // ── ACTIVITIES ─────────────────────────────────────────────────────────────
   getActivities() { return this.request('/activities'); }

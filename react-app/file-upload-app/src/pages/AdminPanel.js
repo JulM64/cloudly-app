@@ -36,6 +36,19 @@ const formatBytes = (bytes) => {
   return `${(bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1)} ${sizes[i]}`;
 };
 
+const getFileIcon = (fileType) => {
+  if (!fileType) return '📁';
+  if (fileType.startsWith('image/'))  return '🖼️';
+  if (fileType.startsWith('video/'))  return '🎬';
+  if (fileType.startsWith('audio/'))  return '🎵';
+  if (fileType === 'application/pdf') return '📄';
+  if (fileType.includes('word'))      return '📝';
+  if (fileType.includes('sheet') || fileType.includes('excel')) return '📊';
+  if (fileType.includes('presentation') || fileType.includes('powerpoint')) return '📑';
+  if (fileType.startsWith('text/'))   return '📃';
+  return '📁';
+};
+
 const timeAgo = (iso) => {
   if (!iso) return '';
   const ms = Date.now() - new Date(iso).getTime();
@@ -68,10 +81,23 @@ const AdminPanel = ({ user }) => {
   const [activeTab, setActiveTab] = useState('users');
   const [stats, setStats]         = useState(null);
   const [users, setUsers]         = useState([]);
+  const [usersLastKey, setUsersLastKey] = useState(null);
+  const [loadingMoreUsers, setLoadingMoreUsers] = useState(false);
   const [activities, setActivities] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
+  const [pendingFileDeleteCount, setPendingFileDeleteCount] = useState(0);
+  const [fileDeleteRequests, setFileDeleteRequests] = useState([]);
+  const [processingRequestId, setProcessingRequestId] = useState(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState('');
+
+  // Files tab state
+  const [files, setFiles]           = useState([]);
+  const [filesLastKey, setFilesLastKey] = useState(null);
+  const [loadingMoreFiles, setLoadingMoreFiles] = useState(false);
+  const [fileSearch, setFileSearch] = useState('');
+  const [deletingFile, setDeletingFile] = useState(null);
+  const [fileMsg, setFileMsg]       = useState('');
 
   // Users tab state
   const [userSearch, setUserSearch]   = useState('');
@@ -96,20 +122,112 @@ const AdminPanel = ({ user }) => {
     try {
       setLoading(true);
       setError('');
-      const [statsRes, usersRes, actsRes, pendingRes] = await Promise.allSettled([
+      const [statsRes, usersRes, actsRes, pendingRes, filesRes, fileDelRes] = await Promise.allSettled([
         apiService.getAdminStats(),
         apiService.getUsers(),
         apiService.getActivities(),
         apiService.getPendingRoleCount(),
+        apiService.getAllFiles(),
+        apiService.getFileDeleteRequests(),
       ]);
       if (statsRes.status === 'fulfilled') setStats(statsRes.value.stats);
-      if (usersRes.status === 'fulfilled') setUsers(usersRes.value.users || []);
+      if (usersRes.status === 'fulfilled') { setUsers(usersRes.value.users || []); setUsersLastKey(usersRes.value.lastKey || null); }
       if (actsRes.status === 'fulfilled')  setActivities(actsRes.value.activities || []);
       if (pendingRes.status === 'fulfilled') setPendingCount(pendingRes.value.pendingCount || 0);
+      if (filesRes.status === 'fulfilled') { setFiles(filesRes.value.files || []); setFilesLastKey(filesRes.value.lastKey || null); }
+      if (fileDelRes.status === 'fulfilled') {
+        const allReqs = fileDelRes.value.requests || [];
+        setFileDeleteRequests(allReqs);
+        setPendingFileDeleteCount(allReqs.filter(r => r.status === 'PENDING').length);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLoadMoreUsers = async () => {
+    if (!usersLastKey || loadingMoreUsers) return;
+    try {
+      setLoadingMoreUsers(true);
+      const res = await apiService.getUsers(usersLastKey);
+      setUsers(prev => [...prev, ...(res.users || [])]);
+      setUsersLastKey(res.lastKey || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingMoreUsers(false);
+    }
+  };
+
+  const handleLoadMoreFiles = async () => {
+    if (!filesLastKey || loadingMoreFiles) return;
+    try {
+      setLoadingMoreFiles(true);
+      const res = await apiService.getAllFiles(filesLastKey);
+      setFiles(prev => [...prev, ...(res.files || [])]);
+      setFilesLastKey(res.lastKey || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingMoreFiles(false);
+    }
+  };
+
+  const handleDeleteFile = async (file) => {
+    const label = file.originalName || file.fileName || 'this file';
+    if (!window.confirm(`Delete "${label}"? This permanently removes it and cannot be undone.`)) return;
+    try {
+      setDeletingFile(file.fileId);
+      setFileMsg('');
+      await apiService.deleteFileMetadata(file.userId, file.fileId);
+      // Update local state immediately — don't wait on a full reload
+      setFiles(prev => prev.filter(f => f.fileId !== file.fileId));
+      setStats(prev => prev && ({ ...prev, totalFiles: Math.max(0, (prev.totalFiles || 1) - 1) }));
+      // Tell every other open page (Dashboard, etc.) to refresh too
+      window.dispatchEvent(new Event('cloudly-files-changed'));
+      setFileMsg(`✅ Deleted "${label}"`);
+      setTimeout(() => setFileMsg(''), 3000);
+    } catch (err) {
+      setFileMsg(`❌ Failed to delete: ${err.message}`);
+    } finally {
+      setDeletingFile(null);
+    }
+  };
+
+  const handleApproveFileDeleteRequest = async (reqItem) => {
+    if (!window.confirm(`Approve removal of "${reqItem.fileName}"? This will permanently delete the file.`)) return;
+    try {
+      setProcessingRequestId(reqItem.requestId);
+      await apiService.approveFileDeleteRequest(reqItem.requestId);
+      setFileDeleteRequests(prev => prev.map(r => r.requestId === reqItem.requestId ? { ...r, status: 'APPROVED' } : r));
+      setPendingFileDeleteCount(prev => Math.max(0, prev - 1));
+      setFiles(prev => prev.filter(f => f.fileId !== reqItem.fileId));
+      window.dispatchEvent(new Event('cloudly-files-changed'));
+      setFileMsg(`✅ Approved removal of "${reqItem.fileName}"`);
+      setTimeout(() => setFileMsg(''), 3000);
+    } catch (err) {
+      setFileMsg(`❌ Failed to approve: ${err.message}`);
+    } finally {
+      setProcessingRequestId(null);
+    }
+  };
+
+  const handleRejectFileDeleteRequest = async (reqItem) => {
+    const reason = window.prompt(`Reason for rejecting removal of "${reqItem.fileName}" (optional):`, '');
+    if (reason === null) return; // cancelled
+    try {
+      setProcessingRequestId(reqItem.requestId);
+      await apiService.rejectFileDeleteRequest(reqItem.requestId, reason);
+      setFileDeleteRequests(prev => prev.map(r => r.requestId === reqItem.requestId ? { ...r, status: 'REJECTED', rejectReason: reason } : r));
+      setPendingFileDeleteCount(prev => Math.max(0, prev - 1));
+      setFileMsg(`✅ Rejected removal request for "${reqItem.fileName}"`);
+      setTimeout(() => setFileMsg(''), 3000);
+    } catch (err) {
+      setFileMsg(`❌ Failed to reject: ${err.message}`);
+    } finally {
+      setProcessingRequestId(null);
     }
   };
 
@@ -156,8 +274,18 @@ const AdminPanel = ({ user }) => {
     ? activities
     : activities.filter(a => a.action?.includes(logFilter));
 
+  // Filter files
+  const filteredFiles = files.filter(f => {
+    if (!fileSearch.trim()) return true;
+    const q = fileSearch.toLowerCase();
+    return (f.originalName || f.fileName || '').toLowerCase().includes(q) ||
+      (f.userEmail || '').toLowerCase().includes(q) ||
+      (f.department || '').toLowerCase().includes(q);
+  });
+
   const tabs = [
     { key: 'users',    label: '👥 Users',    count: users.length },
+    { key: 'files',    label: pendingFileDeleteCount > 0 ? `📁 Files 🔴${pendingFileDeleteCount}` : '📁 Files', count: files.length },
     { key: 'system',   label: '⚙️ System',   count: null },
     { key: 'logs',     label: '📋 Logs',     count: activities.length },
     { key: 'security', label: '🔒 Security', count: pendingCount > 0 ? pendingCount : null },
@@ -300,8 +428,125 @@ const AdminPanel = ({ user }) => {
                     </table>
                   </div>
                 )}
-                <div style={{ marginTop: '14px', fontSize: '13px', color: '#888' }}>
-                  Showing {filteredUsers.length} of {users.length} users
+                <div style={{ marginTop: '14px', fontSize: '13px', color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <span>Showing {filteredUsers.length} of {users.length} loaded users</span>
+                  {usersLastKey && (
+                    <button onClick={handleLoadMoreUsers} disabled={loadingMoreUsers} style={btn(loadingMoreUsers ? '#aaa' : '#0066ff')}>
+                      {loadingMoreUsers ? '⏳ Loading…' : '⬇️ Load more users'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── FILES TAB ── */}
+            {activeTab === 'files' && (
+              <div>
+                {/* Pending removal requests from Dept/Unit Heads — need your approval */}
+                {fileDeleteRequests.filter(r => r.status === 'PENDING').length > 0 && (
+                  <div style={{ backgroundColor: '#fff3e0', border: '1px solid #ff9800', borderRadius: '10px', padding: '18px', marginBottom: '20px' }}>
+                    <div style={{ fontWeight: '700', color: '#e65100', fontSize: '15px', marginBottom: '14px' }}>
+                      🗑️ {pendingFileDeleteCount} Pending Removal Request{pendingFileDeleteCount > 1 ? 's' : ''}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {fileDeleteRequests.filter(r => r.status === 'PENDING').map(r => (
+                        <div key={r.requestId} style={{ backgroundColor: 'white', borderRadius: '8px', padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: '600', fontSize: '14px', color: '#333' }}>{r.fileName}</div>
+                            <div style={{ fontSize: '12px', color: '#666', marginTop: '3px' }}>
+                              Requested by <strong>{r.requestedBy}</strong> ({r.requestedByRole}) · {r.department || '—'} · {timeAgo(r.createdAt)}
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#555', marginTop: '6px', fontStyle: 'italic' }}>
+                              "{r.reason}"
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                            <button
+                              onClick={() => handleApproveFileDeleteRequest(r)}
+                              disabled={processingRequestId === r.requestId}
+                              style={btn(processingRequestId === r.requestId ? '#aaa' : '#4caf50')}
+                            >
+                              {processingRequestId === r.requestId ? '⏳' : '✅ Approve'}
+                            </button>
+                            <button
+                              onClick={() => handleRejectFileDeleteRequest(r)}
+                              disabled={processingRequestId === r.requestId}
+                              style={btn(processingRequestId === r.requestId ? '#aaa' : '#ef5350')}
+                            >
+                              ❌ Reject
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ flex: 1, minWidth: '200px' }}>
+                    <input type="text" placeholder="🔍 Search by file name, owner, or department…" value={fileSearch} onChange={e => setFileSearch(e.target.value)} style={inp} />
+                  </div>
+                  <button onClick={loadAll} style={{ ...btn('#888'), whiteSpace: 'nowrap' }}>🔄 Refresh</button>
+                </div>
+
+                {fileMsg && (
+                  <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '14px', fontSize: '13px', backgroundColor: fileMsg.includes('✅') ? '#e8f5e9' : '#ffeaea', color: fileMsg.includes('✅') ? '#2e7d32' : '#c62828' }}>
+                    {fileMsg}
+                  </div>
+                )}
+
+                {filteredFiles.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px', color: '#aaa' }}>
+                    <div style={{ fontSize: '40px', marginBottom: '10px' }}>📂</div>
+                    <div>No files found{fileSearch ? ` matching "${fileSearch}"` : ''}.</div>
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#f8f9fa' }}>
+                          {['File','Owner','Department','Size','Uploaded',''].map(h => (
+                            <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #eee', fontSize: '12px', color: '#555', fontWeight: '700', textTransform: 'uppercase' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredFiles.map((f, i) => (
+                          <tr key={f.fileId || i} style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: i % 2 === 0 ? 'white' : '#fafafa' }}>
+                            <td style={{ padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                                <span style={{ fontSize: '18px', flexShrink: 0 }}>{getFileIcon(f.fileType)}</span>
+                                <span style={{ fontSize: '13px', color: '#333', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '260px' }}>
+                                  {f.originalName || f.fileName}
+                                </span>
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px 14px', fontSize: '13px', color: '#555' }}>{f.userEmail || '—'}</td>
+                            <td style={{ padding: '12px 14px', fontSize: '13px', color: '#555' }}>{f.department || '—'}</td>
+                            <td style={{ padding: '12px 14px', fontSize: '13px', color: '#555', whiteSpace: 'nowrap' }}>{formatBytes(f.fileSize)}</td>
+                            <td style={{ padding: '12px 14px', fontSize: '12px', color: '#888', whiteSpace: 'nowrap' }}>{timeAgo(f.uploadDate)}</td>
+                            <td style={{ padding: '12px 14px' }}>
+                              <button
+                                onClick={() => handleDeleteFile(f)}
+                                disabled={deletingFile === f.fileId}
+                                style={{ ...btn(deletingFile === f.fileId ? '#aaa' : '#ef5350'), padding: '6px 12px', fontSize: '12px' }}
+                              >
+                                {deletingFile === f.fileId ? '⏳' : '🗑️ Delete'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{ marginTop: '14px', fontSize: '13px', color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <span>Showing {filteredFiles.length} of {files.length} loaded files</span>
+                  {filesLastKey && (
+                    <button onClick={handleLoadMoreFiles} disabled={loadingMoreFiles} style={btn(loadingMoreFiles ? '#aaa' : '#0066ff')}>
+                      {loadingMoreFiles ? '⏳ Loading…' : '⬇️ Load more files'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

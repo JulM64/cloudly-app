@@ -91,6 +91,9 @@ const Navigation = ({ currentUser, signOut }) => {
             {/* Departments — visible to SUPER_ADMIN, DEPT_HEAD, UNIT_HEAD */}
             {canSeeDepts && navLink('/departments', '🏢 Departments')}
 
+            {/* Team Management — DEPT_HEAD and UNIT_HEAD only */}
+            {(isDeptHead || isUnitHead) && navLink('/team', '👥 Team')}
+
             {/* Role Requests — visible to SUPER_ADMIN and DEPT_HEAD */}
             {canSeeRoleRequests && (
               <Link to="/role-requests" style={{

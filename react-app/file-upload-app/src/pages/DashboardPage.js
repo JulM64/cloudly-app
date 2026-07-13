@@ -76,7 +76,27 @@ const DashboardPage = ({ user }) => {
     }
   };
 
-  useEffect(() => { loadStats(); }, []);
+  useEffect(() => {
+    loadStats();
+
+    // Refresh whenever the user comes back to this tab/window — catches
+    // deletes/uploads that happened on another page or in another tab.
+    const handleFocus = () => loadStats();
+    const handleVisibility = () => { if (document.visibilityState === 'visible') loadStats(); };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    // Instant refresh when any page dispatches this after uploading/deleting a file —
+    // e.g. window.dispatchEvent(new Event('cloudly-files-changed')) right after a
+    // successful apiService.deleteFileMetadata() or apiService.uploadFile() call.
+    window.addEventListener('cloudly-files-changed', handleFocus);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('cloudly-files-changed', handleFocus);
+    };
+  }, []);
 
   const handleOpenFile = async (file) => {
     setOpenError('');
@@ -89,7 +109,19 @@ const DashboardPage = ({ user }) => {
       const res = await apiService.openFile(file.userId, file.fileId);
       window.open(res.url, '_blank', 'noopener,noreferrer');
     } catch (err) {
-      setOpenError('Failed to open file: ' + err.message);
+      // File was likely deleted elsewhere and this Dashboard just hadn't refreshed yet —
+      // drop it from the visible list immediately instead of leaving a dead entry.
+      const isMissing = /not found|404/i.test(err.message || '');
+      if (isMissing) {
+        setStats((prev) => prev && {
+          ...prev,
+          recentUploads: (prev.recentUploads || []).filter((f) => f.fileId !== file.fileId),
+        });
+        setOpenError('That file no longer exists — it may have been deleted. Refreshing the list…');
+        loadStats();
+      } else {
+        setOpenError('Failed to open file: ' + err.message);
+      }
     } finally {
       setOpeningFile(null);
     }
