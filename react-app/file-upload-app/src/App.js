@@ -15,6 +15,7 @@ import AdminPanel from './pages/AdminPanel';
 import DepartmentPage from './pages/DepartmentPage';
 import RoleRequestsPage from './pages/RoleRequestsPage';
 import HeadPanel from './pages/HeadPanel';
+import ScanPage from './pages/ScanPage';
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -191,6 +192,7 @@ function App() {
             <Route path="/" element={<ProtectedRoute><HomePage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage user={currentUser} /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
+            <Route path="/scan" element={<ProtectedRoute><ScanPage user={currentUser} /></ProtectedRoute>} />
 
             {/* Departments — Heads + Admin */}
             <Route path="/departments" element={<HeadRoute><DepartmentPage user={currentUser} setMessage={setMessage} /></HeadRoute>} />

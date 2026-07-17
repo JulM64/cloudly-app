@@ -87,6 +87,7 @@ const Navigation = ({ currentUser, signOut }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {navLink('/', '🏠 Home')}
             {navLink('/dashboard', '📊 Dashboard')}
+            {navLink('/scan', '📷 Scan')}
 
             {/* Departments — visible to SUPER_ADMIN, DEPT_HEAD, UNIT_HEAD */}
             {canSeeDepts && navLink('/departments', '🏢 Departments')}
