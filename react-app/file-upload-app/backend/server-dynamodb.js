@@ -12,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Fail fast if required config is missing, instead of silently misbehaving in prod
-const REQUIRED_ENV = ['AWS_REGION', 'COGNITO_USER_POOL_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
+const REQUIRED_ENV = ['AWS_REGION', 'COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length) {
   console.error('❌ Missing required environment variables:', missingEnv.join(', '));
@@ -76,6 +76,16 @@ const uploadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many uploads, please slow down.' },
+});
+
+// Public, unauthenticated endpoint — needs its own strict limit to prevent
+// mass fake-organization creation / signup abuse.
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many signup attempts from this network. Please try again later.' },
 });
 
 // ── TOKEN VERIFICATION (real JWKS-based verification, not just decode) ────────
@@ -194,6 +204,72 @@ function filterFilesByScope(allFiles, scopedDepts, scopedEmails) {
 // ── HEALTH / TEST ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
 app.get('/api/test', (req, res) => res.json({ success: true, message: '✅ Backend working!', timestamp: new Date().toISOString() }));
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ORGANIZATIONS (multi-tenant signup) — public, unauthenticated endpoint.
+// Creates a new organization record + its first user as that org's SUPER_ADMIN.
+// ══════════════════════════════════════════════════════════════════════════════
+app.post('/api/organizations/signup', signupLimiter, async (req, res) => {
+  const { orgName, adminEmail, adminPassword, firstName, lastName } = req.body;
+
+  if (!orgName?.trim() || !adminEmail?.trim() || !adminPassword || !firstName?.trim() || !lastName?.trim()) {
+    return res.status(400).json({ error: 'orgName, adminEmail, adminPassword, firstName, and lastName are all required' });
+  }
+  if (adminPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  try {
+    // Prevent duplicate organization names (case-insensitive)
+    const existing = await dynamoDB.scan({ TableName: 'cloudly-organizations' }).promise();
+    const nameTaken = (existing.Items || []).some(
+      (o) => (o.name || '').toLowerCase().trim() === orgName.toLowerCase().trim()
+    );
+    if (nameTaken) {
+      return res.status(409).json({ error: 'An organization with this name already exists. Please choose another name.' });
+    }
+
+    const orgId = `org_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const orgItem = {
+      orgId,
+      name: orgName.trim(),
+      ownerEmail: adminEmail.trim().toLowerCase(),
+      plan: 'free',
+      createdAt: new Date().toISOString(),
+    };
+    await dynamoDB.put({ TableName: 'cloudly-organizations', Item: orgItem }).promise();
+
+    try {
+      await cognito.signUp({
+        ClientId: process.env.COGNITO_CLIENT_ID,
+        Username: adminEmail.trim(),
+        Password: adminPassword,
+        UserAttributes: [
+          { Name: 'email', Value: adminEmail.trim() },
+          { Name: 'given_name', Value: firstName.trim() },
+          { Name: 'family_name', Value: lastName.trim() },
+          { Name: 'custom:orgId', Value: orgId },
+          { Name: 'custom:role', Value: 'SUPER_ADMIN' },
+        ],
+      }).promise();
+    } catch (cognitoErr) {
+      // Roll back the org record so a failed signup doesn't leave an orphaned organization
+      await dynamoDB.delete({ TableName: 'cloudly-organizations', Key: { orgId } }).promise().catch(() => {});
+      const msg = cognitoErr.code === 'UsernameExistsException'
+        ? 'An account with this email already exists.'
+        : (cognitoErr.message || 'Failed to create admin account');
+      return res.status(400).json({ error: msg });
+    }
+
+    res.json({
+      message: 'Organization created! Please check your email for a verification code.',
+      orgId,
+      orgName: orgItem.name,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create organization: ' + err.message });
+  }
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // USERS ROUTES
