@@ -16,6 +16,7 @@ import DepartmentPage from './pages/DepartmentPage';
 import RoleRequestsPage from './pages/RoleRequestsPage';
 import HeadPanel from './pages/HeadPanel';
 import ScanPage from './pages/ScanPage';
+import OrgSignupPage from './pages/OrgSignupPage';
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -188,6 +189,7 @@ function App() {
 
           <Routes>
             <Route path="/login" element={currentUser ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} onNewPasswordRequired={handleNewPasswordRequired} setMessage={setMessage} />} />
+            <Route path="/signup" element={currentUser ? <Navigate to="/" replace /> : <OrgSignupPage onSignupComplete={() => window.location.assign('/login')} />} />
 
             <Route path="/" element={<ProtectedRoute><HomePage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage user={currentUser} /></ProtectedRoute>} />

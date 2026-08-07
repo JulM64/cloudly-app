@@ -1,8 +1,13 @@
 // src/services/apiService.js
+import cognitoService from './cognitoService';
+
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 class ApiService {
-  constructor() { this.baseURL = API_URL; }
+  constructor() {
+    this.baseURL = API_URL;
+    this._refreshPromise = null; // dedupes concurrent silent token refreshes
+  }
 
   getAuthToken() {
     // 1. PRIMARY: Always check cloudly_user first (syncs with cognitoService.js)
@@ -41,7 +46,7 @@ class ApiService {
     return null;
   }
 
-  async request(endpoint, options = {}) {
+  async request(endpoint, options = {}, _isRetry = false) {
     const token = this.getAuthToken();
     if (!token) throw new Error('Not authenticated. Please login first.');
     const config = {
@@ -51,12 +56,48 @@ class ApiService {
     if (options.body) config.body = JSON.stringify(options.body);
     try {
       const response = await fetch(`${this.baseURL}${endpoint}`, config);
+
+      // Token likely expired mid-session (Cognito ID tokens last ~1 hour).
+      // Try one silent refresh + retry before giving up — this is what stops
+      // the "Invalid or expired token" 401s you were seeing.
+      if (response.status === 401 && !_isRetry) {
+        try {
+          await this._refreshToken();
+          return await this.request(endpoint, options, true);
+        } catch (refreshErr) {
+          console.warn('Silent token refresh failed:', refreshErr);
+          throw new Error('Your session has expired. Please log in again.');
+        }
+      }
+
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: response.statusText }));
         throw new Error(err.error || `HTTP ${response.status}`);
       }
       return await response.json();
     } catch (err) { console.error('❌ API Request failed:', err); throw err; }
+  }
+
+  // Refreshes the Cognito session and persists the new tokens to localStorage.
+  // Multiple simultaneous 401s share a single in-flight refresh instead of each
+  // triggering their own (which could race or hit Cognito's rate limits).
+  _refreshToken() {
+    if (!this._refreshPromise) {
+      this._refreshPromise = cognitoService.refreshSession()
+        .then(({ idToken, accessToken }) => {
+          try {
+            const stored = JSON.parse(localStorage.getItem('cloudly_user') || '{}');
+            stored.idToken = idToken;
+            stored.accessToken = accessToken;
+            localStorage.setItem('cloudly_user', JSON.stringify(stored));
+          } catch (e) {
+            console.warn('Could not persist refreshed tokens', e);
+          }
+          return idToken;
+        })
+        .finally(() => { this._refreshPromise = null; });
+    }
+    return this._refreshPromise;
   }
 
   async publicRequest(endpoint, options = {}) {
@@ -173,10 +214,13 @@ class ApiService {
   getDashboardStats() { return this.request('/stats/dashboard'); }
   getAdminStats()     { return this.request('/stats/admin'); }
 
+  // ── ORGANIZATIONS ─────────────────────────────────────────────────────────
+  createOrganization(data) { return this.publicRequest('/organizations/signup', { method: 'POST', body: data }); }
+
   // ── HEALTH ─────────────────────────────────────────────────────────────────
   healthCheck() { return this.publicRequest('/health'); }
   test()        { return this.publicRequest('/test'); }
   isAuthenticated() { return !!this.getAuthToken(); }
 }
 
-export default new ApiService();
+export default new ApiService(); 
