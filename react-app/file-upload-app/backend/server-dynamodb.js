@@ -131,6 +131,7 @@ function verifyCognitoToken(req, res, next) {
         email: decoded.email,
         groups,
         department: decoded['custom:department'] || '',
+        orgId: decoded['custom:orgId'] || '',
         role,
         isAdmin: role === 'SUPER_ADMIN',
         firstName: decoded.given_name || 'User'
@@ -159,11 +160,11 @@ function escapeCognitoFilter(value) {
 }
 
 // ── ACTIVITY LOGGING ──────────────────────────────────────────────────────────
-async function logActivity(userId, email, action, target, details = {}) {
+async function logActivity(userId, email, orgId, action, target, details = {}) {
   try {
     await dynamoDB.put({
       TableName: 'cloudly-activities',
-      Item: { userId, timestamp: Date.now(), email, action, target, details: JSON.stringify(details), createdAt: new Date().toISOString() }
+      Item: { userId, timestamp: Date.now(), email, orgId, action, target, details: JSON.stringify(details), createdAt: new Date().toISOString() }
     }).promise();
   } catch (err) { console.error('Activity log error:', err.message); }
 }
@@ -293,20 +294,23 @@ app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
       console.warn('Could not fetch avatar profiles:', e.message);
     }
 
-    const users = (result.Users || []).map(u => {
-      const attr = n => (u.Attributes || []).find(a => a.Name === n)?.Value || '';
-      const userId = attr('sub');
-      return {
-        userId,
-        email: attr('email'),
-        name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
-        department: attr('custom:department'),
-        role: attr('custom:role') || 'MEMBER',
-        status: u.UserStatus,
-        username: u.Username,
-        avatarBase64: avatarMap[userId] || null
-      };
-    });
+    const users = (result.Users || [])
+      .map(u => {
+        const attr = n => (u.Attributes || []).find(a => a.Name === n)?.Value || '';
+        const userId = attr('sub');
+        return {
+          userId,
+          email: attr('email'),
+          name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
+          department: attr('custom:department'),
+          orgId: attr('custom:orgId'),
+          role: attr('custom:role') || 'MEMBER',
+          status: u.UserStatus,
+          username: u.Username,
+          avatarBase64: avatarMap[userId] || null
+        };
+      })
+      .filter(u => u.orgId === req.user.orgId);
     res.json({
       users,
       lastKey: result.PaginationToken ? encodeURIComponent(result.PaginationToken) : null,
@@ -323,7 +327,7 @@ app.get('/api/users', verifyCognitoToken, requireAdmin, async (req, res) => {
 app.get('/api/users/team', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const allDepts = deptResult.Items || [];
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const scopedDepts = await getScopedDepts(req.user, allDepts);
     const scopedDeptNames = new Set(scopedDepts.map(d => (d.name || '').toLowerCase().trim()));
 
@@ -354,12 +358,14 @@ app.get('/api/users/team', verifyCognitoToken, requireHeadOrAdmin, async (req, r
           email: attr('email'),
           name: `${attr('given_name')} ${attr('family_name')}`.trim() || attr('email'),
           department: attr('custom:department'),
+          orgId: attr('custom:orgId'),
           role: attr('custom:role') || 'MEMBER',
           status: u.UserStatus,
           username: u.Username,
           avatarBase64: avatarMap[userId] || null
         };
       })
+      .filter(u => u.orgId === req.user.orgId)
       .filter(u => req.user.role === 'SUPER_ADMIN' || scopedDeptNames.has((u.department || '').toLowerCase().trim()));
 
     res.json({ users });
@@ -374,15 +380,18 @@ app.put('/api/users/:email/department', sensitiveLimiter, verifyCognitoToken, re
     const { department } = req.body;
     const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(email)}"`, Limit: 1 }).promise();
     if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found' });
+    const targetUser = listResult.Users[0];
+    const targetOrgId = (targetUser.Attributes || []).find(a => a.Name === 'custom:orgId')?.Value;
+    if (targetOrgId !== req.user.orgId) return res.status(404).json({ error: 'User not found' });
     await cognito.adminUpdateUserAttributes({
       UserPoolId: process.env.COGNITO_USER_POOL_ID,
-      Username: listResult.Users[0].Username,
+      Username: targetUser.Username,
       UserAttributes: [{ Name: 'custom:department', Value: department }]
     }).promise();
 
     // Remove from all OTHER depts membersList
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const allDepts = deptResult.Items || [];
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const targetLower = (department || '').toLowerCase().trim();
     const others = allDepts.filter(d =>
       (d.name || '').toLowerCase().trim() !== targetLower &&
@@ -399,7 +408,7 @@ app.put('/api/users/:email/department', sensitiveLimiter, verifyCognitoToken, re
       }
       await dynamoDB.update({ TableName: 'cloudly-departments', Key: { id: d.id }, UpdateExpression: updateExpr[0], ExpressionAttributeValues: updateVals }).promise();
     }
-    await logActivity(req.user.userId, req.user.email, 'UPDATE_USER_DEPARTMENT', email, { department });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPDATE_USER_DEPARTMENT', email, { department });
     res.json({ message: 'User department updated', email, department });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update department: ' + err.message });
@@ -423,9 +432,10 @@ app.post('/api/users/create', sensitiveLimiter, verifyCognitoToken, requireAdmin
         { Name: 'family_name', Value: lastName || '' },
         { Name: 'custom:department', Value: department || '' },
         { Name: 'custom:role', Value: role || 'MEMBER' },
+        { Name: 'custom:orgId', Value: req.user.orgId },
       ]
     }).promise();
-    await logActivity(req.user.userId, req.user.email, 'CREATE_USER', email, { department, role });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'CREATE_USER', email, { department, role });
     res.status(201).json({ message: 'User created successfully', email, tempPassword, firstName, lastName, department, role: role || 'MEMBER' });
   } catch (err) {
     if (err.code === 'UsernameExistsException') return res.status(409).json({ error: 'A user with this email already exists' });
@@ -456,7 +466,7 @@ app.post('/api/users/avatar', uploadLimiter, verifyCognitoToken, async (req, res
         updatedAt: new Date().toISOString()
       }
     }).promise();
-    await logActivity(req.user.userId, req.user.email, 'UPDATE_AVATAR', req.user.email, {});
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPDATE_AVATAR', req.user.email, {});
     res.json({ message: 'Avatar updated successfully', avatarBase64: imageBase64 });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update avatar: ' + err.message });
@@ -481,7 +491,7 @@ app.delete('/api/users/avatar', uploadLimiter, verifyCognitoToken, async (req, r
       TableName: 'cloudly-user-profiles',
       Key: { userId: req.user.userId }
     }).promise();
-    await logActivity(req.user.userId, req.user.email, 'REMOVE_AVATAR', req.user.email, {});
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'REMOVE_AVATAR', req.user.email, {});
     res.json({ message: 'Avatar removed' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to remove avatar: ' + err.message });
@@ -503,6 +513,8 @@ app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHead
     if (req.user.role === 'SUPER_ADMIN') {
       const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(targetEmail)}"`, Limit: 1 }).promise();
       if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found in Cognito' });
+      const targetOrgId = (listResult.Users[0].Attributes || []).find(a => a.Name === 'custom:orgId')?.Value;
+      if (targetOrgId !== req.user.orgId) return res.status(404).json({ error: 'User not found in Cognito' });
 
       // Update role in Cognito
       await cognito.adminUpdateUserAttributes({
@@ -522,7 +534,7 @@ app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHead
 
       // Update DynamoDB departments
       const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-      const allDepts = deptResult.Items || [];
+      const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
       const targetDeptLower = (department || '').toLowerCase().trim();
 
       // 1) Update target dept: set role in membersList + set as manager if head
@@ -584,21 +596,26 @@ app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHead
       const requestId = `role_req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await dynamoDB.put({
         TableName: 'cloudly-role-requests',
-        Item: { requestId, targetEmail, targetName: targetName || targetEmail, newRole, department: department || '', reason: reason || '', proposedBy: req.user.email, proposedByRole: 'SUPER_ADMIN', status: 'APPROVED', approvedBy: req.user.email, approvedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        Item: { requestId, orgId: req.user.orgId, targetEmail, targetName: targetName || targetEmail, newRole, department: department || '', reason: reason || '', proposedBy: req.user.email, proposedByRole: 'SUPER_ADMIN', status: 'APPROVED', approvedBy: req.user.email, approvedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
       }).promise();
 
-      await logActivity(req.user.userId, req.user.email, 'AUTO_APPROVE_ROLE_CHANGE', targetEmail, { newRole, department });
+      await logActivity(req.user.userId, req.user.email, req.user.orgId, 'AUTO_APPROVE_ROLE_CHANGE', targetEmail, { newRole, department });
       console.log(`✅ SUPER_ADMIN auto-approved: ${targetEmail} → ${newRole} in ${department}`);
       return res.status(201).json({ message: `Role changed to ${newRole}`, autoApproved: true, newRole });
     }
 
     // DEPT_HEAD / UNIT_HEAD: pending approval
+    const targetListResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(targetEmail)}"`, Limit: 1 }).promise();
+    if (!targetListResult.Users?.length) return res.status(404).json({ error: 'User not found in Cognito' });
+    const pendingTargetOrgId = (targetListResult.Users[0].Attributes || []).find(a => a.Name === 'custom:orgId')?.Value;
+    if (pendingTargetOrgId !== req.user.orgId) return res.status(404).json({ error: 'User not found in Cognito' });
+
     const requestId = `role_req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     await dynamoDB.put({
       TableName: 'cloudly-role-requests',
-      Item: { requestId, targetEmail, targetName: targetName || targetEmail, newRole, department: department || req.user.department, reason: reason || '', proposedBy: req.user.email, proposedByRole: req.user.role, status: 'PENDING', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+      Item: { requestId, orgId: req.user.orgId, targetEmail, targetName: targetName || targetEmail, newRole, department: department || req.user.department, reason: reason || '', proposedBy: req.user.email, proposedByRole: req.user.role, status: 'PENDING', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
     }).promise();
-    await logActivity(req.user.userId, req.user.email, 'PROPOSE_ROLE_CHANGE', targetEmail, { newRole, department });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'PROPOSE_ROLE_CHANGE', targetEmail, { newRole, department });
     res.status(201).json({ message: 'Role change request submitted for approval', roleRequest: { requestId } });
   } catch (err) {
     console.error('Role request error:', err);
@@ -609,7 +626,7 @@ app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHead
 app.get('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise();
-    let requests = result.Items || [];
+    let requests = (result.Items || []).filter((r) => r.orgId === req.user.orgId);
     if (req.user.role === 'DEPT_HEAD') requests = requests.filter(r => r.department === req.user.department);
     requests.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ requests, pendingCount: requests.filter(r => r.status === 'PENDING').length });
@@ -621,7 +638,7 @@ app.get('/api/role-requests', verifyCognitoToken, requireHeadOrAdmin, async (req
 app.get('/api/role-requests/pending-count', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise();
-    let pending = (result.Items || []).filter(r => r.status === 'PENDING');
+    let pending = (result.Items || []).filter(r => r.status === 'PENDING' && r.orgId === req.user.orgId);
     if (req.user.role === 'DEPT_HEAD') pending = pending.filter(r => r.department === req.user.department);
     res.json({ pendingCount: pending.length });
   } catch (err) {
@@ -633,14 +650,14 @@ app.put('/api/role-requests/:requestId/approve', sensitiveLimiter, verifyCognito
   try {
     const { requestId } = req.params;
     const result = await dynamoDB.get({ TableName: 'cloudly-role-requests', Key: { requestId } }).promise();
-    if (!result.Item) return res.status(404).json({ error: 'Not found' });
+    if (!result.Item || result.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Not found' });
     if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
     const rr = result.Item;
     const listResult = await cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Filter: `email = "${escapeCognitoFilter(rr.targetEmail)}"`, Limit: 1 }).promise();
     if (!listResult.Users?.length) return res.status(404).json({ error: 'User not found' });
     await cognito.adminUpdateUserAttributes({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Username: listResult.Users[0].Username, UserAttributes: [{ Name: 'custom:role', Value: rr.newRole }] }).promise();
     await dynamoDB.update({ TableName: 'cloudly-role-requests', Key: { requestId }, UpdateExpression: 'set #s = :s, approvedBy = :ab, approvedAt = :aa, updatedAt = :ua', ExpressionAttributeNames: { '#s': 'status' }, ExpressionAttributeValues: { ':s': 'APPROVED', ':ab': req.user.email, ':aa': new Date().toISOString(), ':ua': new Date().toISOString() } }).promise();
-    await logActivity(req.user.userId, req.user.email, 'APPROVE_ROLE_CHANGE', rr.targetEmail, { newRole: rr.newRole });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'APPROVE_ROLE_CHANGE', rr.targetEmail, { newRole: rr.newRole });
     res.json({ message: 'Role approved', roleRequest: { ...rr, status: 'APPROVED' } });
   } catch (err) {
     res.status(500).json({ error: 'Failed to approve: ' + err.message });
@@ -652,10 +669,10 @@ app.put('/api/role-requests/:requestId/reject', sensitiveLimiter, verifyCognitoT
     const { requestId } = req.params;
     const { reason } = req.body;
     const result = await dynamoDB.get({ TableName: 'cloudly-role-requests', Key: { requestId } }).promise();
-    if (!result.Item) return res.status(404).json({ error: 'Not found' });
+    if (!result.Item || result.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Not found' });
     if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
     await dynamoDB.update({ TableName: 'cloudly-role-requests', Key: { requestId }, UpdateExpression: 'set #s = :s, rejectedBy = :rb, rejectedAt = :ra, rejectReason = :rr, updatedAt = :ua', ExpressionAttributeNames: { '#s': 'status' }, ExpressionAttributeValues: { ':s': 'REJECTED', ':rb': req.user.email, ':ra': new Date().toISOString(), ':rr': reason || '', ':ua': new Date().toISOString() } }).promise();
-    await logActivity(req.user.userId, req.user.email, 'REJECT_ROLE_CHANGE', result.Item.targetEmail, { reason });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'REJECT_ROLE_CHANGE', result.Item.targetEmail, { reason });
     res.json({ message: 'Role request rejected' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to reject: ' + err.message });
@@ -669,7 +686,7 @@ app.put('/api/role-requests/:requestId/reject', sensitiveLimiter, verifyCognitoT
 app.get('/api/departments', verifyCognitoToken, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    let departments = result.Items || [];
+    let departments = (result.Items || []).filter((d) => d.orgId === req.user.orgId);
     if (req.user.role !== 'SUPER_ADMIN') {
       const allDepts = [...departments];
       const scoped = await getScopedDepts(req.user, allDepts);
@@ -685,7 +702,7 @@ app.get('/api/departments', verifyCognitoToken, async (req, res) => {
 app.get('/api/departments/hierarchy', verifyCognitoToken, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const all = result.Items || [];
+    const all = (result.Items || []).filter((d) => d.orgId === req.user.orgId);
     const topLevel = all.filter(d => !d.parentId);
     const buildTree = pid => all.filter(d => d.parentId === pid).map(d => ({ ...d, children: buildTree(d.id) }));
     res.json({ hierarchy: topLevel.map(d => ({ ...d, children: buildTree(d.id) })), allDepartments: all });
@@ -702,10 +719,15 @@ app.post('/api/departments', sensitiveLimiter, verifyCognitoToken, requireAdmin,
     if (itemType === 'unit' && !parentId) return res.status(400).json({ error: 'Units must have a parent department' });
     if (parentId) {
       const p = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id: parentId } }).promise();
-      if (!p.Item) return res.status(404).json({ error: 'Parent not found' });
+      if (!p.Item || p.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Parent not found' });
     }
     const departmentId = `dept_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const bucketName = `${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}-${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
+    // Include orgId so two different organizations can never collide on the same
+    // bucket name (S3 bucket names are globally unique across ALL of AWS, not
+    // just your account) — without this, two orgs both naming a department
+    // "Sales" would end up sharing the exact same bucket.
+    const orgSlug = (req.user.orgId || 'org').replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(-12);
+    const bucketName = `${process.env.S3_BUCKET_PREFIX || 'cloudly-dept'}-${orgSlug}-${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 63);
     try {
       await s3.headBucket({ Bucket: bucketName }).promise();
     } catch (e) {
@@ -733,9 +755,9 @@ app.post('/api/departments', sensitiveLimiter, verifyCognitoToken, requireAdmin,
         await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'], AllowedOrigins: allowedOrigins, ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
       } else throw e;
     }
-    const department = { id: departmentId, name, s3Bucket: bucketName, manager: manager || 'Not assigned', managerEmail: managerEmail || null, description: description || '', type: itemType, parentId: parentId || null, status: 'Active', members: 0, membersList: [], projects: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const department = { id: departmentId, orgId: req.user.orgId, name, s3Bucket: bucketName, manager: manager || 'Not assigned', managerEmail: managerEmail || null, description: description || '', type: itemType, parentId: parentId || null, status: 'Active', members: 0, membersList: [], projects: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     await dynamoDB.put({ TableName: 'cloudly-departments', Item: department }).promise();
-    await logActivity(req.user.userId, req.user.email, 'CREATE_' + itemType.toUpperCase(), name, { bucketName });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'CREATE_' + itemType.toUpperCase(), name, { bucketName });
     res.status(201).json({ message: `${itemType} created`, department });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to create', details: err.code });
@@ -746,9 +768,10 @@ app.put('/api/departments/:id', sensitiveLimiter, verifyCognitoToken, requireHea
   try {
     const { id } = req.params;
     const { name, manager, managerEmail, description, status, members, membersList, projects, type, parentId } = req.body;
+    const existing = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Department not found' });
     if (req.user.role === 'UNIT_HEAD') {
-      const dept = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id } }).promise();
-      if ((dept.Item?.name || '').toLowerCase() !== (req.user.department || '').toLowerCase()) return res.status(403).json({ error: 'You can only update your own unit' });
+      if ((existing.Item?.name || '').toLowerCase() !== (req.user.department || '').toLowerCase()) return res.status(403).json({ error: 'You can only update your own unit' });
     }
     const expr = []; const names = {}; const vals = {};
     if (name) { expr.push('#name = :name'); names['#name'] = 'name'; vals[':name'] = name; }
@@ -773,6 +796,8 @@ app.put('/api/departments/:id', sensitiveLimiter, verifyCognitoToken, requireHea
 
 app.delete('/api/departments/:id', sensitiveLimiter, verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
+    const existing = await dynamoDB.get({ TableName: 'cloudly-departments', Key: { id: req.params.id } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Department not found' });
     await dynamoDB.delete({ TableName: 'cloudly-departments', Key: { id: req.params.id } }).promise();
     res.json({ message: 'Department deleted' });
   } catch (err) {
@@ -809,7 +834,7 @@ app.post('/api/files/upload-url', uploadLimiter, verifyCognitoToken, async (req,
 
     // Look up the bucket for the user's OWN department — never let the client pick the bucket
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const allDepts = deptResult.Items || [];
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const myDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === (req.user.department || '').toLowerCase().trim());
     if (!myDept?.s3Bucket) return res.status(400).json({ error: 'No department bucket found for your account' });
 
@@ -839,9 +864,9 @@ app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
     const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType } = req.body;
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString() };
+    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, orgId: req.user.orgId, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString() };
     await dynamoDB.put({ TableName: 'cloudly-files', Item: metadata }).promise();
-    await logActivity(req.user.userId, req.user.email, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
     res.status(201).json({ message: 'File metadata saved', file: metadata });
   } catch (err) {
     res.status(500).json({ error: 'Failed to save file metadata: ' + err.message });
@@ -869,6 +894,9 @@ app.get('/api/files/open/:userId/:fileId', verifyCognitoToken, async (req, res) 
     }).promise();
     if (!result.Items?.length) return res.status(404).json({ error: 'File not found' });
     const file = result.Items[0];
+    // Organization boundary is checked FIRST and is non-negotiable — no role,
+    // including SUPER_ADMIN, can ever cross into another organization's files.
+    if (file.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
     // Check access
     const canAccess = req.user.userId === userId ||
       req.user.role === 'SUPER_ADMIN' ||
@@ -891,7 +919,7 @@ app.get('/api/files/open/:userId/:fileId', verifyCognitoToken, async (req, res) 
 app.get('/api/files/team', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
   try {
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const allDepts = deptResult.Items || [];
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const scopedDepts = req.user.role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
     const scopedEmails = getScopedEmails(req.user, scopedDepts);
 
@@ -902,9 +930,10 @@ app.get('/api/files/team', verifyCognitoToken, requireHeadOrAdmin, async (req, r
       catch { return res.status(400).json({ error: 'Invalid lastKey' }); }
     }
     const result = await dynamoDB.scan(params).promise();
+    const orgFiles = (result.Items || []).filter((f) => f.orgId === req.user.orgId);
     const scopedFiles = req.user.role === 'SUPER_ADMIN'
-      ? (result.Items || [])
-      : filterFilesByScope(result.Items || [], scopedDepts, scopedEmails);
+      ? orgFiles
+      : filterFilesByScope(orgFiles, scopedDepts, scopedEmails);
 
     res.json({
       files: scopedFiles,
@@ -920,7 +949,11 @@ app.get('/api/files/department/:department', verifyCognitoToken, async (req, res
     const { department } = req.params;
     const canAccess = req.user.role === 'SUPER_ADMIN' || req.user.department === department || req.user.role === 'DEPT_HEAD';
     if (!canAccess) return res.status(403).json({ error: 'Access denied' });
-    const result = await dynamoDB.scan({ TableName: 'cloudly-files', FilterExpression: 'department = :dept', ExpressionAttributeValues: { ':dept': department } }).promise();
+    const result = await dynamoDB.scan({
+      TableName: 'cloudly-files',
+      FilterExpression: 'department = :dept AND orgId = :orgId',
+      ExpressionAttributeValues: { ':dept': department, ':orgId': req.user.orgId }
+    }).promise();
     res.json({ files: result.Items || [] });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch department files: ' + err.message });
@@ -930,7 +963,12 @@ app.get('/api/files/department/:department', verifyCognitoToken, async (req, res
 app.get('/api/files/all', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
-    const params = { TableName: 'cloudly-files', Limit: limit };
+    const params = {
+      TableName: 'cloudly-files',
+      Limit: limit,
+      FilterExpression: 'orgId = :orgId',
+      ExpressionAttributeValues: { ':orgId': req.user.orgId },
+    };
     if (req.query.lastKey) {
       try { params.ExclusiveStartKey = JSON.parse(decodeURIComponent(req.query.lastKey)); }
       catch { return res.status(400).json({ error: 'Invalid lastKey' }); }
@@ -949,6 +987,8 @@ app.delete('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req
   try {
     const { userId, fileId } = req.params;
     if (userId !== req.user.userId && req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Not authorized' });
+    const existing = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
     await dynamoDB.delete({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
     res.json({ message: 'File metadata deleted' });
   } catch (err) {
@@ -970,14 +1010,14 @@ app.post('/api/file-delete-requests', sensitiveLimiter, verifyCognitoToken, requ
     if (!reason || !reason.trim()) return res.status(400).json({ error: 'A reason (motif) is required to request removal' });
 
     const fileResult = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
-    if (!fileResult.Item) return res.status(404).json({ error: 'File not found' });
+    if (!fileResult.Item || fileResult.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
     const file = fileResult.Item;
 
     // Confirm the requester actually has this file in their own scope — a Unit Head
     // can't request deletion of a file belonging to a different department.
     if (req.user.role !== 'SUPER_ADMIN') {
       const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-      const allDepts = deptResult.Items || [];
+      const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
       const scopedDepts = await getScopedDepts(req.user, allDepts);
       const scopedEmails = getScopedEmails(req.user, scopedDepts);
       const inScope = filterFilesByScope([file], scopedDepts, scopedEmails).length > 0;
@@ -987,6 +1027,7 @@ app.post('/api/file-delete-requests', sensitiveLimiter, verifyCognitoToken, requ
     const requestId = `delreq_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     const item = {
       requestId,
+      orgId: req.user.orgId,
       fileId,
       fileUserId: userId,
       fileName: file.originalName || file.fileName,
@@ -999,7 +1040,7 @@ app.post('/api/file-delete-requests', sensitiveLimiter, verifyCognitoToken, requ
       createdAt: new Date().toISOString(),
     };
     await dynamoDB.put({ TableName: 'cloudly-file-delete-requests', Item: item }).promise();
-    await logActivity(req.user.userId, req.user.email, 'REQUEST_FILE_DELETE', item.fileName, { reason: item.reason });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'REQUEST_FILE_DELETE', item.fileName, { reason: item.reason });
     res.json({ message: 'Removal request submitted for admin approval', request: item });
   } catch (err) {
     res.status(500).json({ error: 'Failed to submit removal request: ' + err.message });
@@ -1011,7 +1052,7 @@ app.get('/api/file-delete-requests/mine', verifyCognitoToken, requireHeadOrAdmin
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
     const mine = (result.Items || [])
-      .filter(r => r.requestedBy === req.user.email)
+      .filter(r => r.orgId === req.user.orgId && r.requestedBy === req.user.email)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ requests: mine });
   } catch (err) {
@@ -1023,7 +1064,7 @@ app.get('/api/file-delete-requests/mine', verifyCognitoToken, requireHeadOrAdmin
 app.get('/api/file-delete-requests', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
-    const requests = (result.Items || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const requests = (result.Items || []).filter((r) => r.orgId === req.user.orgId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ requests });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch removal requests: ' + err.message });
@@ -1033,7 +1074,7 @@ app.get('/api/file-delete-requests', verifyCognitoToken, requireAdmin, async (re
 app.get('/api/file-delete-requests/pending-count', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-file-delete-requests' }).promise();
-    const pendingCount = (result.Items || []).filter(r => r.status === 'PENDING').length;
+    const pendingCount = (result.Items || []).filter(r => r.status === 'PENDING' && r.orgId === req.user.orgId).length;
     res.json({ pendingCount });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch pending count: ' + err.message });
@@ -1044,7 +1085,7 @@ app.put('/api/file-delete-requests/:requestId/approve', sensitiveLimiter, verify
   try {
     const { requestId } = req.params;
     const result = await dynamoDB.get({ TableName: 'cloudly-file-delete-requests', Key: { requestId } }).promise();
-    if (!result.Item) return res.status(404).json({ error: 'Request not found' });
+    if (!result.Item || result.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Request not found' });
     if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
     const reqItem = result.Item;
 
@@ -1059,7 +1100,7 @@ app.put('/api/file-delete-requests/:requestId/approve', sensitiveLimiter, verify
       ExpressionAttributeValues: { ':s': 'APPROVED', ':rb': req.user.email, ':ra': new Date().toISOString() }
     }).promise();
 
-    await logActivity(req.user.userId, req.user.email, 'APPROVE_FILE_DELETE', reqItem.fileName, { requestedBy: reqItem.requestedBy, reason: reqItem.reason });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'APPROVE_FILE_DELETE', reqItem.fileName, { requestedBy: reqItem.requestedBy, reason: reqItem.reason });
     res.json({ message: 'Removal approved — file deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to approve removal: ' + err.message });
@@ -1071,7 +1112,7 @@ app.put('/api/file-delete-requests/:requestId/reject', sensitiveLimiter, verifyC
     const { requestId } = req.params;
     const { reason } = req.body;
     const result = await dynamoDB.get({ TableName: 'cloudly-file-delete-requests', Key: { requestId } }).promise();
-    if (!result.Item) return res.status(404).json({ error: 'Request not found' });
+    if (!result.Item || result.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Request not found' });
     if (result.Item.status !== 'PENDING') return res.status(400).json({ error: 'Already processed' });
 
     await dynamoDB.update({
@@ -1082,7 +1123,7 @@ app.put('/api/file-delete-requests/:requestId/reject', sensitiveLimiter, verifyC
       ExpressionAttributeValues: { ':s': 'REJECTED', ':rb': req.user.email, ':ra': new Date().toISOString(), ':rr': reason || '' }
     }).promise();
 
-    await logActivity(req.user.userId, req.user.email, 'REJECT_FILE_DELETE', result.Item.fileName, { requestedBy: result.Item.requestedBy });
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'REJECT_FILE_DELETE', result.Item.fileName, { requestedBy: result.Item.requestedBy });
     res.json({ message: 'Removal request rejected' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to reject removal: ' + err.message });
@@ -1096,13 +1137,13 @@ app.put('/api/file-delete-requests/:requestId/reject', sensitiveLimiter, verifyC
 app.get('/api/activities', verifyCognitoToken, async (req, res) => {
   try {
     const result = await dynamoDB.scan({ TableName: 'cloudly-activities', Limit: 200 }).promise();
-    let activities = (result.Items || []).sort((a, b) => b.timestamp - a.timestamp);
+    let activities = (result.Items || []).filter((a) => a.orgId === req.user.orgId).sort((a, b) => b.timestamp - a.timestamp);
     const role = req.user.role || 'MEMBER';
     if (role === 'SUPER_ADMIN') {
       return res.json({ activities: activities.slice(0, 50) });
     }
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
-    const allDepts = deptResult.Items || [];
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const scopedDepts = await getScopedDepts(req.user, allDepts);
     if (role === 'MEMBER') {
       activities = activities.filter(a => a.userId === req.user.userId || a.email === req.user.email);
@@ -1131,7 +1172,7 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
         dynamoDB.scan({ TableName: 'cloudly-activities' }).promise()
       ]);
       const files = fileResult.Items || [];
-      const acts = (actResult.Items || []).filter(a => a.userId === req.user.userId || a.email === req.user.email).sort((a, b) => b.timestamp - a.timestamp).slice(0, 8);
+      const acts = (actResult.Items || []).filter(a => a.orgId === req.user.orgId && (a.userId === req.user.userId || a.email === req.user.email)).sort((a, b) => b.timestamp - a.timestamp).slice(0, 8);
       return res.json({ stats: { scope: 'MEMBER', totalFiles: files.length, storageUsed: files.reduce((s, f) => s + (f.fileSize || 0), 0), department: req.user.department || 'N/A', teamMembers: 0, recentUploads: files.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 5), recentActivity: acts } });
     }
 
@@ -1141,9 +1182,9 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
       dynamoDB.scan({ TableName: 'cloudly-files' }).promise(),
       dynamoDB.scan({ TableName: 'cloudly-activities', Limit: 300 }).promise()
     ]);
-    const allDepts = deptResult.Items || [];
-    const allFiles = fileResult.Items || [];
-    const allActs = (actResult.Items || []).sort((a, b) => b.timestamp - a.timestamp);
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
+    const allFiles = (fileResult.Items || []).filter((f) => f.orgId === req.user.orgId);
+    const allActs = (actResult.Items || []).filter((a) => a.orgId === req.user.orgId).sort((a, b) => b.timestamp - a.timestamp);
 
     const scopedDepts = role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
     const scopedEmails = getScopedEmails(req.user, scopedDepts);
@@ -1172,16 +1213,32 @@ app.get('/api/stats/dashboard', verifyCognitoToken, async (req, res) => {
 
 app.get('/api/stats/admin', verifyCognitoToken, requireAdmin, async (req, res) => {
   try {
-    const [deptResult, fileResult, roleReqResult, cognitoResult] = await Promise.all([
+    // Cognito's Filter doesn't support custom attributes, so we page through all
+    // users and filter by orgId here — same pattern as /api/users/team.
+    let allCognitoUsers = [];
+    let paginationToken = null;
+    let pages = 0;
+    do {
+      const params = { UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 };
+      if (paginationToken) params.PaginationToken = paginationToken;
+      const result = await cognito.listUsers(params).promise().catch(() => ({ Users: [] }));
+      allCognitoUsers = allCognitoUsers.concat(result.Users || []);
+      paginationToken = result.PaginationToken || null;
+      pages++;
+    } while (paginationToken && pages < 10);
+
+    const [deptResult, fileResult, roleReqResult] = await Promise.all([
       dynamoDB.scan({ TableName: 'cloudly-departments' }).promise(),
       dynamoDB.scan({ TableName: 'cloudly-files' }).promise(),
       dynamoDB.scan({ TableName: 'cloudly-role-requests' }).promise().catch(() => ({ Items: [] })),
-      cognito.listUsers({ UserPoolId: process.env.COGNITO_USER_POOL_ID, Limit: 60 }).promise().catch(() => ({ Users: [] }))
     ]);
-    const departments = deptResult.Items || [];
-    const files = fileResult.Items || [];
-    const roleRequests = roleReqResult.Items || [];
-    const cognitoUsers = cognitoResult.Users || [];
+    const departments = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
+    const files = (fileResult.Items || []).filter((f) => f.orgId === req.user.orgId);
+    const roleRequests = (roleReqResult.Items || []).filter((r) => r.orgId === req.user.orgId);
+    const cognitoUsers = allCognitoUsers.filter(
+      (u) => (u.Attributes || []).find((a) => a.Name === 'custom:orgId')?.Value === req.user.orgId
+    );
+
     const roleCounts = { SUPER_ADMIN: 0, DEPT_HEAD: 0, UNIT_HEAD: 0, MEMBER: 0 };
     cognitoUsers.forEach(u => {
       const r = (u.Attributes || []).find(a => a.Name === 'custom:role')?.Value || 'MEMBER';
