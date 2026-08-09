@@ -1,0 +1,158 @@
+/* src/components/Navigation.css */
+
+.cl-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+}
+
+.cl-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-5);
+  border-bottom: 1px solid var(--c-border);
+}
+.cl-brand-mark {
+  width: 30px; height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--c-brand);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.cl-brand-name { font-size: var(--fs-md); font-weight: 700; color: var(--c-brand); line-height: 1.2; }
+.cl-brand-sub { font-size: 11px; color: var(--c-text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.cl-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-4) var(--space-3);
+  overflow-y: auto;
+}
+.cl-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.cl-nav-item:hover { background: var(--c-bg); color: var(--c-text); }
+.cl-nav-item--active { background: var(--c-brand-tint); color: var(--c-brand); font-weight: 600; }
+
+.cl-topbar {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-width);
+  right: 0;
+  height: var(--topbar-height);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-6);
+  gap: var(--space-4);
+  z-index: 150;
+}
+
+.cl-topbar-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  width: 320px;
+  color: var(--c-text-faint);
+}
+.cl-topbar-search input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: var(--fs-base);
+  color: var(--c-text);
+  width: 100%;
+}
+.cl-topbar-search input::placeholder { color: var(--c-text-faint); }
+
+.cl-topbar-actions { display: flex; align-items: center; gap: var(--space-3); }
+
+.cl-icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--c-text-muted);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.cl-icon-btn:hover { background: var(--c-bg); color: var(--c-text); }
+
+.cl-user-menu { position: relative; }
+.cl-user-trigger { border: none; background: none; padding: 0; cursor: pointer; display: flex; }
+
+.cl-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 220px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2);
+  z-index: 300;
+}
+.cl-dropdown-header { padding: var(--space-2) var(--space-3) var(--space-3); border-bottom: 1px solid var(--c-border); margin-bottom: var(--space-2); }
+.cl-dropdown-name { font-size: var(--fs-base); font-weight: 600; color: var(--c-text); }
+.cl-dropdown-email { font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
+.cl-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px var(--space-3);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+.cl-dropdown-item:hover { background: var(--c-bg); }
+.cl-dropdown-item--danger { color: var(--c-danger); }
+.cl-dropdown-item--danger:hover { background: var(--c-danger-bg); }
+
+/* App content offset to account for fixed sidebar + topbar */
+.cl-app-content {
+  margin-left: var(--sidebar-width);
+  padding-top: var(--topbar-height);
+  min-height: 100vh;
+  background: var(--c-bg);
+}
+
+@media (max-width: 900px) {
+  .cl-sidebar { transform: translateX(-100%); transition: transform 0.2s ease; }
+  .cl-sidebar.cl-sidebar--open { transform: translateX(0); }
+  .cl-topbar { left: 0; }
+  .cl-app-content { margin-left: 0; }
+  .cl-topbar-search { width: 180px; }
+}

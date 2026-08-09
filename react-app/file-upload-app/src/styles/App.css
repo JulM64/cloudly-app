@@ -1,0 +1,118 @@
+/* src/App.css — rebuilt on design tokens (see styles/tokens.css).
+   Removed: gradient text (.section-title), floating cloud animation,
+   3D-lift button (.btn-3d), glassmorphism (.page-card/.upload-wrapper).
+   Kept the same class names so existing JSX (className="page-card" etc.)
+   keeps working without a full page-by-page rewrite being required on
+   day one — they now render flat and tokenized instead of glassy/gradient. */
+
+html, body {
+  font-family: var(--font-sans);
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.55;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* ---------- Legacy class compatibility layer ---------- */
+/* .section-title: was a gradient-clipped H1. Now a plain page title. */
+.section-title {
+  font-size: var(--fs-2xl);
+  margin: 0 0 var(--space-3) 0;
+  color: var(--c-text);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.page-description {
+  font-size: var(--fs-base);
+  color: var(--c-text-muted);
+  margin-bottom: var(--space-8);
+  max-width: 640px;
+}
+
+/* .page-card: was frosted glass. Now a flat bordered surface (= ui-card). */
+.page-card {
+  background: var(--c-surface);
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--c-border);
+  margin-top: var(--space-6);
+  text-align: left;
+  box-shadow: var(--shadow-xs);
+}
+.page-card h3 {
+  margin-top: 0;
+  color: var(--c-text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  margin-bottom: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* .upload-wrapper: was frosted glass hero block. Now a plain content column. */
+.upload-wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 var(--space-5);
+}
+
+/* .btn-3d: was gradient + lift-on-hover. Now the flat primary button. */
+.btn-3d {
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--c-brand);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  transition: background-color 0.15s ease;
+}
+.btn-3d:hover { background: var(--c-brand-hover); }
+.btn-3d:active { background: var(--c-brand-active); }
+.btn-3d:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.hover-card { transition: border-color 0.15s ease; }
+.hover-card:hover { border-color: var(--c-border-strong); }
+
+/* ---------- Tables ---------- */
+.admin-table { width: 100%; border-collapse: collapse; margin-top: var(--space-5); }
+.admin-table th, .admin-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--c-border); }
+.admin-table th {
+  background: var(--c-bg);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--c-text-muted);
+}
+.table-row:hover td { background: var(--c-bg) !important; }
+
+.role-badge { padding: 3px 10px; border-radius: var(--radius-pill); font-size: var(--fs-xs); font-weight: 600; }
+.role-badge.admin { background: var(--c-danger-bg); color: var(--c-danger); }
+.role-badge.user { background: var(--c-brand-tint); color: var(--c-brand); }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin-top: var(--space-5); }
+
+.loading { text-align: center; padding: var(--space-10); font-size: var(--fs-md); color: var(--c-text-muted); }
+.user-welcome { background: var(--c-bg); padding: var(--space-4); border-radius: var(--radius-md); margin-bottom: var(--space-5); }
+
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.recent-uploads::-webkit-scrollbar { width: 6px; }
+.recent-uploads::-webkit-scrollbar-track { background: var(--c-bg); border-radius: 3px; }
+.recent-uploads::-webkit-scrollbar-thumb { background: var(--c-border-strong); border-radius: 3px; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 768px) {
+  .upload-wrapper { padding: 0 var(--space-3); }
+  .section-title { font-size: var(--fs-xl); }
+  .page-card { padding: var(--space-4); }
+}

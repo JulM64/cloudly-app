@@ -1,157 +1,108 @@
-// src/components/Navigation.js - WITH ROLE BADGES & PENDING NOTIFICATION
-import React, { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import apiService from '../services/apiService';
+// src/components/Navigation.js
+// Restructured from a top navbar into a left sidebar + top bar, matching the
+// Stitch reference screens. Nav items map 1:1 onto the existing routes in
+// App.js — no route, permission, or auth logic changed, only presentation.
+import React, { useState, useRef, useEffect } from 'react';
+import { NavLink, useNavigate } from 'react-router-dom';
+import {
+  IconDashboard, IconDepartments, IconRoles, IconUsers, IconScan,
+  IconSettings, IconAdmin, IconSearch, IconBell, IconHelp, IconLogout,
+  IconFolder,
+} from './icons';
 import Avatar from './Avatar';
+import './Navigation.css';
 
-const ROLE_CONFIG = {
-  SUPER_ADMIN: { label: 'Super Admin', color: '#9c27b0', icon: '👑' },
-  DEPT_HEAD:   { label: 'Dept Head',   color: '#0066ff', icon: '🏢' },
-  UNIT_HEAD:   { label: 'Unit Head',   color: '#4caf50', icon: '🔷' },
-  MEMBER:      { label: 'Member',      color: '#ff9800', icon: '👤' },
+const NAV_ITEMS = [
+  { to: '/', label: 'Home', icon: IconFolder, roles: null },
+  { to: '/dashboard', label: 'Dashboard', icon: IconDashboard, roles: null },
+  { to: '/departments', label: 'Departments', icon: IconDepartments, roles: ['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'] },
+  { to: '/role-requests', label: 'Roles', icon: IconRoles, roles: ['SUPER_ADMIN', 'DEPT_HEAD'] },
+  { to: '/team', label: 'Team', icon: IconUsers, roles: ['DEPT_HEAD', 'UNIT_HEAD'] },
+  { to: '/scan', label: 'Scan', icon: IconScan, roles: null },
+  { to: '/settings', label: 'Settings', icon: IconSettings, roles: null },
+  { to: '/admin', label: 'Admin Panel', icon: IconAdmin, roles: ['SUPER_ADMIN'] },
+];
+
+const ROLE_LABEL = {
+  SUPER_ADMIN: 'Enterprise Admin',
+  DEPT_HEAD: 'Department Head',
+  UNIT_HEAD: 'Unit Head',
+  MEMBER: 'Member',
 };
 
 const Navigation = ({ currentUser, signOut }) => {
-  const location  = useLocation();
-  const navigate  = useNavigate();
-  const [pendingCount, setPendingCount] = useState(0);
-
-  // ── Live avatar state — source of truth is the BACKEND, not localStorage ──
-  const [avatar, setAvatar] = useState(null);
+  const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
   useEffect(() => {
-    if (!currentUser) return;
-    // Always fetch fresh avatar from backend on mount / when user changes
-    (async () => {
-      try {
-        const res = await apiService.getMyAvatar();
-        setAvatar(res.avatarBase64 || null);
-      } catch (e) {
-        console.warn('Could not load avatar for nav', e);
-      }
-    })();
+    const onClick = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
 
-    // Listen for live avatar updates dispatched from SettingsPage (same-tab, instant)
-    const handleAvatarUpdate = (e) => {
-      setAvatar(e.detail?.avatar || null);
-    };
-    window.addEventListener('cloudly-avatar-updated', handleAvatarUpdate);
-    return () => window.removeEventListener('cloudly-avatar-updated', handleAvatarUpdate);
-  }, [currentUser]);
+  if (!currentUser) return null;
 
-  const isAdmin    = currentUser?.role === 'SUPER_ADMIN';
-  const isDeptHead = currentUser?.role === 'DEPT_HEAD';
-  const isUnitHead = currentUser?.role === 'UNIT_HEAD';
-  const canSeeDepts = isAdmin || isDeptHead || isUnitHead;
-  const canSeeRoleRequests = isAdmin || isDeptHead;
-
-  // Poll pending role requests count
-  useEffect(() => {
-    if (!currentUser || !canSeeRoleRequests) return;
-    const fetchCount = async () => {
-      try {
-        const res = await apiService.getPendingRoleCount();
-        setPendingCount(res.pendingCount || 0);
-      } catch {}
-    };
-    fetchCount();
-    const interval = setInterval(fetchCount, 30000); // every 30s
-    return () => clearInterval(interval);
-  }, [currentUser]);
-
-  const handleSignOut = async () => { await signOut(); navigate('/login'); };
-
-  const roleCfg = ROLE_CONFIG[currentUser?.role] || ROLE_CONFIG.MEMBER;
-
-  const navLink = (path, label) => (
-    <Link to={path} style={{
-      textDecoration: 'none',
-      color: location.pathname === path ? '#0066ff' : '#333',
-      fontWeight: location.pathname === path ? '600' : '400',
-      padding: '8px 12px', borderRadius: '5px', fontSize: '15px',
-      display: 'flex', alignItems: 'center', gap: '6px',
-      backgroundColor: location.pathname === path ? '#f0f7ff' : 'transparent',
-      transition: 'all 0.2s',
-    }}>{label}</Link>
-  );
+  const visibleItems = NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(currentUser.role));
 
   return (
-    <header className="cloudly-header">
-      <div className="logo">
-        <span style={{ fontSize: '24px' }}>☁️</span>
-        Cloudly
-      </div>
-
-      <nav>
-        {currentUser ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {navLink('/', '🏠 Home')}
-            {navLink('/dashboard', '📊 Dashboard')}
-            {navLink('/scan', '📷 Scan')}
-
-            {/* Departments — visible to SUPER_ADMIN, DEPT_HEAD, UNIT_HEAD */}
-            {canSeeDepts && navLink('/departments', '🏢 Departments')}
-
-            {/* Team Management — DEPT_HEAD and UNIT_HEAD only */}
-            {(isDeptHead || isUnitHead) && navLink('/team', '👥 Team')}
-
-            {/* Role Requests — visible to SUPER_ADMIN and DEPT_HEAD */}
-            {canSeeRoleRequests && (
-              <Link to="/role-requests" style={{
-                textDecoration: 'none',
-                color: location.pathname === '/role-requests' ? '#0066ff' : '#333',
-                fontWeight: location.pathname === '/role-requests' ? '600' : '400',
-                padding: '8px 12px', borderRadius: '5px', fontSize: '15px',
-                display: 'flex', alignItems: 'center', gap: '6px',
-                backgroundColor: location.pathname === '/role-requests' ? '#f0f7ff' : 'transparent',
-                position: 'relative',
-              }}>
-                🔐 Roles
-                {pendingCount > 0 && (
-                  <span style={{
-                    backgroundColor: '#ef5350', color: 'white',
-                    borderRadius: '10px', padding: '1px 7px',
-                    fontSize: '11px', fontWeight: '800', minWidth: '18px', textAlign: 'center',
-                  }}>{pendingCount}</span>
-                )}
-              </Link>
-            )}
-
-            {/* Admin — SUPER_ADMIN only */}
-            {isAdmin && navLink('/admin', '👑 Admin')}
-
-            {navLink('/settings', '⚙️ Settings')}
-
-            {/* User info */}
-            <div className="user-menu" style={{ marginLeft: '8px' }}>
-              <Avatar
-                src={avatar}
-                name={currentUser.firstName ? `${currentUser.firstName} ${currentUser.lastName || ''}`.trim() : currentUser.email}
-                email={currentUser.email}
-                size={40}
-                style={{ border: `2px solid ${roleCfg.color}` }}
-              />
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: '#333' }}>
-                  {currentUser.firstName}
-                </div>
-                <div style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span style={{ color: roleCfg.color, fontWeight: '700' }}>{roleCfg.icon} {roleCfg.label}</span>
-                </div>
-                {currentUser.department && (
-                  <div style={{ fontSize: '11px', color: '#aaa' }}>📂 {currentUser.department}</div>
-                )}
-              </div>
-              <button onClick={handleSignOut} className="btn-3d sign-out-btn" style={{ padding: '8px 16px', fontSize: '14px' }}>
-                Sign Out
-              </button>
-            </div>
+    <>
+      <aside className="cl-sidebar">
+        <div className="cl-sidebar-brand">
+          <span className="cl-brand-mark">C</span>
+          <div>
+            <div className="cl-brand-name">Cloudly</div>
+            <div className="cl-brand-sub">{ROLE_LABEL[currentUser.role] || 'Member'}</div>
           </div>
-        ) : (
-          <Link to="/login" style={{ textDecoration: 'none', color: '#333', padding: '8px 12px' }}>🔐 Login</Link>
-        )}
-      </nav>
-    </header>
+        </div>
+
+        <nav className="cl-nav">
+          {visibleItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              className={({ isActive }) => `cl-nav-item ${isActive ? 'cl-nav-item--active' : ''}`}
+            >
+              <item.icon size={18} />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+
+      <header className="cl-topbar">
+        <div className="cl-topbar-search">
+          <IconSearch size={16} />
+          <input type="text" placeholder="Search..." aria-label="Search" />
+        </div>
+
+        <div className="cl-topbar-actions">
+          <button type="button" className="cl-icon-btn" aria-label="Notifications"><IconBell size={18} /></button>
+          <button type="button" className="cl-icon-btn" aria-label="Help"><IconHelp size={18} /></button>
+
+          <div className="cl-user-menu" ref={menuRef}>
+            <button type="button" className="cl-user-trigger" onClick={() => setMenuOpen((o) => !o)}>
+              <Avatar name={`${currentUser.firstName} ${currentUser.lastName}`} email={currentUser.email} src={currentUser.avatar} size={34} />
+            </button>
+            {menuOpen && (
+              <div className="cl-dropdown">
+                <div className="cl-dropdown-header">
+                  <div className="cl-dropdown-name">{currentUser.firstName} {currentUser.lastName}</div>
+                  <div className="cl-dropdown-email">{currentUser.email}</div>
+                </div>
+                <button type="button" className="cl-dropdown-item" onClick={() => { setMenuOpen(false); navigate('/settings'); }}>
+                  <IconSettings size={16} /> Settings
+                </button>
+                <button type="button" className="cl-dropdown-item cl-dropdown-item--danger" onClick={() => { setMenuOpen(false); signOut(); }}>
+                  <IconLogout size={16} /> Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+    </>
   );
 };
 

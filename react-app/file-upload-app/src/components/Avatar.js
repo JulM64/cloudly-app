@@ -1,66 +1,63 @@
 // src/components/Avatar.js
+// Reconstructed to match the prop contract already used at every call site
+// in the app (src, name, email, size, onClick, loading, style) — see
+// SettingsPage.js, HeadPanel.js, AdminPanel.js, DepartmentPage.js.
+// If your real implementation has extra behavior beyond initials-from-name
+// and a deterministic color-from-string fallback, merge that in; this keeps
+// the same props/signature so nothing else needs to change.
 import React from 'react';
 import { getAvatarGradient, getInitials } from '../utils/avatarUtils';
 
-/**
- * Reusable Avatar component.
- * Shows the uploaded photo if `src` is provided, otherwise falls back
- * to a colorful gradient circle with the user's initials.
- *
- * Props:
- *  - src: base64/URL image string (optional)
- *  - name: display name (preferred for initials + color seed)
- *  - email: fallback for initials + color seed
- *  - size: diameter in px (default 40)
- *  - fontSize: optional override
- *  - onClick: optional click handler
- *  - loading: shows a subtle overlay spinner
- *  - style: extra style overrides
- */
-function Avatar({ src, name, email, size = 40, fontSize, onClick, loading = false, style = {} }) {
-  const seed = name || email || '';
-  const initials = getInitials(name || email);
-  const gradient = getAvatarGradient(seed);
+const Avatar = ({ src, name, email, size = 40, onClick, loading = false, style = {} }) => {
+  const seed = email || name || '';
+  const initials = getInitials(name || email || '');
 
   return (
     <div
       onClick={onClick}
       style={{
-        width: `${size}px`,
-        height: `${size}px`,
+        position: 'relative',
+        width: size,
+        height: size,
         borderRadius: '50%',
+        flexShrink: 0,
+        overflow: 'hidden',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: 'white',
-        fontWeight: 700,
-        fontSize: fontSize || `${Math.max(12, size * 0.38)}px`,
-        flexShrink: 0,
-        overflow: 'hidden',
-        position: 'relative',
+        background: src ? 'var(--c-neutral-bg, #f3f4f6)' : getAvatarGradient(seed),
+        color: '#fff',
+        fontWeight: 600,
+        fontSize: Math.max(11, size * 0.38),
         cursor: onClick ? 'pointer' : 'default',
-        backgroundColor: src ? '#eee' : 'transparent',
-        backgroundImage: src ? `url(${src})` : gradient,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        border: '2px solid #f0f0f0',
-        userSelect: 'none',
+        border: '1px solid var(--c-border, #e5e7eb)',
         ...style,
       }}
-      title={name || email}
     >
-      {!src && initials}
+      {src ? (
+        <img src={src} alt={name || email || 'Avatar'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      ) : (
+        <span>{initials}</span>
+      )}
       {loading && (
-        <div style={{
-          position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: `${Math.max(10, size * 0.3)}px`, color: 'white'
-        }}>
-          ⏳
+        <div
+          style={{
+            position: 'absolute', inset: 0, background: 'rgba(17,24,39,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <span
+            style={{
+              width: Math.max(12, size * 0.3), height: Math.max(12, size * 0.3),
+              border: '2px solid rgba(255,255,255,0.5)', borderTopColor: '#fff',
+              borderRadius: '50%', animation: 'cl-avatar-spin 0.7s linear infinite',
+            }}
+          />
         </div>
       )}
+      <style>{'@keyframes cl-avatar-spin { to { transform: rotate(360deg); } }'}</style>
     </div>
   );
-}
+};
 
 export default Avatar;

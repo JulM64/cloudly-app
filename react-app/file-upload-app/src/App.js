@@ -1,12 +1,15 @@
-// src/App.js - WITH ROLE-BASED ROUTING
+// src/App.js — same routes, auth flow, and role guards as before.
+// Only the layout shell changed: top navbar + floating clouds -> fixed
+// sidebar + topbar (see components/Navigation.js and styles/App.css).
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import './App.css';
+import './styles/App.css';
 
 import cognitoService from './services/cognitoService';
 import s3Service from './services/s3Service';
 
 import Navigation from './components/Navigation';
+import { IconCheckCircle, IconAlertCircle, IconXCircle, IconClose } from './components/icons';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import DashboardPage from './pages/DashboardPage';
@@ -31,7 +34,6 @@ function App() {
       if (savedUser) {
         try {
           const userData = JSON.parse(savedUser);
-          // Ensure role always defaults to MEMBER if missing (never undefined)
           if (!userData.role || !['SUPER_ADMIN','DEPT_HEAD','UNIT_HEAD','MEMBER'].includes(userData.role)) {
             userData.role = 'MEMBER';
             localStorage.setItem('cloudly_user', JSON.stringify(userData));
@@ -52,7 +54,7 @@ function App() {
   const handleSignOut = () => {
     cognitoService.signOut();
     setCurrentUser(null);
-    setMessage('✅ Signed out successfully');
+    setMessage('Signed out successfully.');
     setTimeout(() => setMessage(''), 3000);
   };
 
@@ -60,7 +62,7 @@ function App() {
     try {
       await s3Service.initialize(userData.idToken);
       setCurrentUser(userData);
-      setMessage('✅ Login successful!');
+      setMessage('Login successful.');
       setTimeout(() => setMessage(''), 3000);
     } catch {
       setCurrentUser(userData);
@@ -80,30 +82,28 @@ function App() {
       setCurrentUser(userData);
       setNewPasswordRequired(false);
       setPendingCognitoUser(null);
-      setMessage('✅ Password changed successfully!');
+      setMessage('Password changed successfully.');
       setTimeout(() => setMessage(''), 3000);
     } catch (err) {
-      setMessage(`❌ ${err.message || 'Failed to change password'}`);
+      setMessage(err.message || 'Failed to change password.');
     } finally {
       setLoading(false);
     }
   };
 
   const Spinner = () => (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ width: '50px', height: '50px', border: '4px solid rgba(0,102,255,0.1)', borderTop: '4px solid #0066ff', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-      <p style={{ color: '#666' }}>Loading…</p>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column', gap: '16px' }}>
+      <div style={{ width: '40px', height: '40px', border: '3px solid var(--c-brand-tint)', borderTop: '3px solid var(--c-brand)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <p style={{ color: 'var(--c-text-muted)', fontSize: 'var(--fs-sm)' }}>Loading…</p>
     </div>
   );
 
-  // Protected route — any logged in user
   const ProtectedRoute = ({ children }) => {
     if (loading) return <Spinner />;
     if (!currentUser) return <Navigate to="/login" replace />;
     return children;
   };
 
-  // Admin-only route
   const AdminRoute = ({ children }) => {
     if (loading) return <Spinner />;
     if (!currentUser) return <Navigate to="/login" replace />;
@@ -111,7 +111,6 @@ function App() {
     return children;
   };
 
-  // Head or Admin route (DEPT_HEAD, UNIT_HEAD, SUPER_ADMIN)
   const HeadRoute = ({ children }) => {
     if (loading) return <Spinner />;
     if (!currentUser) return <Navigate to="/login" replace />;
@@ -119,7 +118,6 @@ function App() {
     return children;
   };
 
-  // Role requests route (SUPER_ADMIN and DEPT_HEAD)
   const RoleRequestsRoute = ({ children }) => {
     if (loading) return <Spinner />;
     if (!currentUser) return <Navigate to="/login" replace />;
@@ -127,7 +125,6 @@ function App() {
     return children;
   };
 
-  // Team Management route — DEPT_HEAD and UNIT_HEAD only (SUPER_ADMIN already has the full Admin Panel)
   const TeamRoute = ({ children }) => {
     if (loading) return <Spinner />;
     if (!currentUser) return <Navigate to="/login" replace />;
@@ -136,89 +133,67 @@ function App() {
   };
 
   useEffect(() => {
-    const createClouds = () => {
-      if (document.querySelectorAll('.cloud').length > 0) return;
-      const container = document.createElement('div');
-      container.id = 'cloud-container';
-      Object.assign(container.style, { position: 'fixed', top: '0', left: '0', width: '100%', height: '100%', pointerEvents: 'none', zIndex: '1' });
-      for (let i = 0; i < 4; i++) { const cloud = document.createElement('div'); cloud.className = 'cloud'; container.appendChild(cloud); }
-      document.body.appendChild(container);
-    };
-    createClouds();
-  }, []);
-
-  useEffect(() => {
     if (message) { const t = setTimeout(() => setMessage(''), 5000); return () => clearTimeout(t); }
   }, [message]);
+
+  const bannerTone = message.toLowerCase().includes('fail') || message.toLowerCase().includes('error')
+    ? 'danger'
+    : message.toLowerCase().includes('warn')
+      ? 'warning'
+      : 'success';
+  const BannerIcon = bannerTone === 'danger' ? IconXCircle : bannerTone === 'warning' ? IconAlertCircle : IconCheckCircle;
 
   return (
     <Router>
       <div className="App">
-        <Navigation currentUser={currentUser} signOut={handleSignOut} />
+        {currentUser && <Navigation currentUser={currentUser} signOut={handleSignOut} />}
 
-        <main className="cloudly-main">
-          {message && (
-            <div style={{
-              padding: '15px', borderRadius: '10px', marginBottom: '20px', textAlign: 'center', fontWeight: '500',
-              maxWidth: '1200px', margin: '0 auto 20px auto', animation: 'fadeIn 0.5s ease-out',
-              backgroundColor: message.includes('✅') ? 'rgba(76,175,80,0.1)' : message.includes('⚠️') ? 'rgba(255,152,0,0.1)' : 'rgba(244,67,54,0.1)',
-              border: `1px solid ${message.includes('✅') ? '#4CAF50' : message.includes('⚠️') ? '#ff9800' : '#f44336'}`,
-              color: message.includes('✅') ? '#4CAF50' : message.includes('⚠️') ? '#ff9800' : '#f44336',
-            }}>{message}</div>
-          )}
-
-          {/* New Password Modal */}
-          {newPasswordRequired && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-              <div className="page-card" style={{ maxWidth: '500px', padding: '40px', backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
-                <h2 style={{ marginBottom: '20px', color: '#333' }}>🔑 Set New Password</h2>
-                <p style={{ marginBottom: '30px', color: '#666' }}>For security reasons, please set a new password before continuing.</p>
-                <form onSubmit={e => { e.preventDefault(); handleCompleteNewPassword(e.target.newPassword.value); }}>
-                  <div style={{ marginBottom: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', color: '#555', fontWeight: '500' }}>New Password</label>
-                    <input type="password" name="newPassword" placeholder="Min 8 characters, include uppercase, number & symbol" required minLength={8}
-                      style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '15px' }} />
-                  </div>
-                  <button type="submit" disabled={loading} className="btn-3d" style={{ width: '100%', padding: '14px', fontSize: '16px' }}>
-                    {loading ? '⏳ Updating...' : '🔑 Set New Password'}
-                  </button>
-                </form>
+        <main className={currentUser ? 'cl-app-content' : ''}>
+          <div style={{ maxWidth: '1280px', margin: '0 auto', padding: currentUser ? '24px 32px' : '0' }}>
+            {message && (
+              <div className={`ui-banner ui-banner--${bannerTone}`} style={{ marginBottom: '20px' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <BannerIcon size={16} />
+                  {message}
+                </span>
+                <button className="ui-banner-close" onClick={() => setMessage('')} aria-label="Dismiss"><IconClose size={14} /></button>
               </div>
-            </div>
-          )}
+            )}
 
-          <Routes>
-            <Route path="/login" element={currentUser ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} onNewPasswordRequired={handleNewPasswordRequired} setMessage={setMessage} />} />
-            <Route path="/signup" element={currentUser ? <Navigate to="/" replace /> : <OrgSignupPage onSignupComplete={() => window.location.assign('/login')} />} />
+            {newPasswordRequired && (
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(17,24,39,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                <div className="ui-card ui-card--padded" style={{ maxWidth: '440px', width: '90%' }}>
+                  <h2 style={{ marginBottom: '8px', fontSize: 'var(--fs-lg)', color: 'var(--c-text)' }}>Set a new password</h2>
+                  <p style={{ marginBottom: '24px', color: 'var(--c-text-muted)', fontSize: 'var(--fs-sm)' }}>For security reasons, please set a new password before continuing.</p>
+                  <form onSubmit={e => { e.preventDefault(); handleCompleteNewPassword(e.target.newPassword.value); }}>
+                    <div className="ui-field">
+                      <label className="ui-label">New password</label>
+                      <input className="ui-input" type="password" name="newPassword" placeholder="Min 8 characters, include uppercase, number & symbol" required minLength={8} />
+                    </div>
+                    <button type="submit" disabled={loading} className="ui-btn ui-btn--primary ui-btn--md" style={{ width: '100%' }}>
+                      {loading ? 'Updating…' : 'Set new password'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
 
-            <Route path="/" element={<ProtectedRoute><HomePage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
-            <Route path="/dashboard" element={<ProtectedRoute><DashboardPage user={currentUser} /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute><SettingsPage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
-            <Route path="/scan" element={<ProtectedRoute><ScanPage user={currentUser} /></ProtectedRoute>} />
+            <Routes>
+              <Route path="/login" element={currentUser ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} onNewPasswordRequired={handleNewPasswordRequired} setMessage={setMessage} />} />
+              <Route path="/signup" element={currentUser ? <Navigate to="/" replace /> : <OrgSignupPage onSignupComplete={() => window.location.assign('/login')} />} />
 
-            {/* Departments — Heads + Admin */}
-            <Route path="/departments" element={<HeadRoute><DepartmentPage user={currentUser} setMessage={setMessage} /></HeadRoute>} />
+              <Route path="/" element={<ProtectedRoute><HomePage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
+              <Route path="/dashboard" element={<ProtectedRoute><DashboardPage user={currentUser} /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute><SettingsPage user={currentUser} setMessage={setMessage} /></ProtectedRoute>} />
+              <Route path="/scan" element={<ProtectedRoute><ScanPage user={currentUser} /></ProtectedRoute>} />
 
-            {/* Role Requests — Admin + DEPT_HEAD */}
-            <Route path="/role-requests" element={<RoleRequestsRoute><RoleRequestsPage user={currentUser} /></RoleRequestsRoute>} />
-
-            {/* Team Management — DEPT_HEAD + UNIT_HEAD only */}
-            <Route path="/team" element={<TeamRoute><HeadPanel user={currentUser} /></TeamRoute>} />
-
-            {/* Admin only */}
-            <Route path="/admin" element={<AdminRoute><AdminPanel user={currentUser} /></AdminRoute>} />
-          </Routes>
+              <Route path="/departments" element={<HeadRoute><DepartmentPage user={currentUser} setMessage={setMessage} /></HeadRoute>} />
+              <Route path="/role-requests" element={<RoleRequestsRoute><RoleRequestsPage user={currentUser} /></RoleRequestsRoute>} />
+              <Route path="/team" element={<TeamRoute><HeadPanel user={currentUser} /></TeamRoute>} />
+              <Route path="/admin" element={<AdminRoute><AdminPanel user={currentUser} /></AdminRoute>} />
+            </Routes>
+          </div>
         </main>
-
-        <footer style={{ padding: '0px', backgroundColor: '#f8f9fa', borderTop: '1px solid #e0e0e0', textAlign: 'center', color: '#666', marginTop: '40px', position: 'relative', zIndex: '100' }}>
-          <p>© 2026 Cloudly. All rights reserved.</p>
-          <p style={{ fontSize: '14px', opacity: 0.7 }}>AWS Cognito Authentication • S3 Cloud Storage • Department-based Access Control</p>
-          {currentUser && (
-            <p style={{ fontSize: '12px', opacity: 0.25, marginTop: '0px' }}>
-              Logged in as: {currentUser.email} • Role: {currentUser.role} • Department: {currentUser.department}
-            </p>
-          )}
-        </footer>
       </div>
     </Router>
   );

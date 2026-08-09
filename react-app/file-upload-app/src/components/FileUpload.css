@@ -1,0 +1,36 @@
+/* src/components/FileUpload.css */
+.cl-dropzone {
+  border: 1.5px dashed var(--c-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--c-bg);
+  padding: var(--space-10) var(--space-6);
+  text-align: center;
+  color: var(--c-text-faint);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.cl-dropzone[data-active] { border-color: var(--c-brand); background: var(--c-brand-tint); }
+.cl-dropzone-title { font-size: var(--fs-md); font-weight: 600; color: var(--c-text); margin-top: var(--space-2); }
+.cl-dropzone-sub { font-size: var(--fs-sm); color: var(--c-text-muted); max-width: 380px; margin-bottom: var(--space-2); }
+
+.cl-upload-queue { margin-top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.cl-upload-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  color: var(--c-text-muted);
+}
+.cl-upload-row-main { flex: 1; min-width: 0; }
+.cl-upload-row-name { font-size: var(--fs-sm); font-weight: 500; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-upload-row-meta { font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
+.cl-upload-bar { height: 4px; background: var(--c-border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.cl-upload-bar div { height: 100%; background: var(--c-brand); transition: width 0.2s ease; }
+.cl-upload-error { font-size: var(--fs-xs); color: var(--c-danger); margin-top: 4px; }
+.cl-upload-status-ok { color: var(--c-success); flex-shrink: 0; }
+.cl-upload-status-error { color: var(--c-danger); flex-shrink: 0; }

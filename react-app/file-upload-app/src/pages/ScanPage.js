@@ -1,14 +1,18 @@
 // src/pages/ScanPage.js - Scan physical documents with the phone camera,
 // straighten/enhance each page, combine into one PDF, upload to the user's
 // department bucket via the existing secure apiService.uploadFile() flow.
+// Visual layer rebuilt on the shared ui/ primitives + design tokens.
+// Capture / corner-adjustment / warp / enhance logic is unchanged.
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import apiService from '../services/apiService';
 import { warpQuadToRect } from '../utils/perspectiveTransform';
 import { enhanceCanvas } from '../utils/imageEnhance';
-
-const CORNER_LABELS = ['Top-left', 'Top-right', 'Bottom-right', 'Bottom-left'];
-const MAX_OUTPUT_DIMENSION = 1600; // cap processed page size — keeps PDFs a sane size
+import PageHeader from '../components/ui/PageHeader';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import { IconUploadCloud, IconCamera, IconFolder, IconClose, IconFile } from '../components/icons';
 
 function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
@@ -43,10 +47,10 @@ function CornerAdjuster({ image, onConfirm, onDiscard }) {
   const insetX = image.naturalWidth * 0.08;
   const insetY = image.naturalHeight * 0.08;
   const [corners, setCorners] = useState([
-    { x: insetX, y: insetY },                                     // top-left
-    { x: image.naturalWidth - insetX, y: insetY },                 // top-right
-    { x: image.naturalWidth - insetX, y: image.naturalHeight - insetY }, // bottom-right
-    { x: insetX, y: image.naturalHeight - insetY },                // bottom-left
+    { x: insetX, y: insetY },
+    { x: image.naturalWidth - insetX, y: insetY },
+    { x: image.naturalWidth - insetX, y: image.naturalHeight - insetY },
+    { x: insetX, y: image.naturalHeight - insetY },
   ]);
   const svgRef = useRef(null);
   const draggingIndex = useRef(null);
@@ -85,11 +89,11 @@ function CornerAdjuster({ image, onConfirm, onDiscard }) {
 
   return (
     <div>
-      <p style={{ fontSize: '13px', color: '#666', marginBottom: '12px' }}>
+      <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-muted)', marginBottom: '14px' }}>
         Drag the 4 corners so they match the edges of your document, then confirm.
       </p>
-      <div style={{ position: 'relative', maxWidth: '500px', margin: '0 auto', touchAction: 'none' }}>
-        <img src={image.src} alt="Captured page" style={{ width: '100%', display: 'block', borderRadius: '8px' }} draggable={false} />
+      <div style={{ position: 'relative', maxWidth: '460px', margin: '0 auto', touchAction: 'none' }}>
+        <img src={image.src} alt="Captured page" style={{ width: '100%', display: 'block', borderRadius: 'var(--radius-md)' }} draggable={false} />
         <svg
           ref={svgRef}
           viewBox={`0 0 ${image.naturalWidth} ${image.naturalHeight}`}
@@ -97,32 +101,23 @@ function CornerAdjuster({ image, onConfirm, onDiscard }) {
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
-          <polygon points={polygonPoints} fill="rgba(0,102,255,0.18)" stroke="#0066ff" strokeWidth={image.naturalWidth * 0.004} />
+          <polygon points={polygonPoints} fill="rgba(37,99,235,0.16)" stroke="#2563eb" strokeWidth={image.naturalWidth * 0.004} />
           {corners.map((c, i) => (
-            <circle
-              key={i}
-              cx={c.x}
-              cy={c.y}
-              r={image.naturalWidth * 0.018}
-              fill="white"
-              stroke="#0066ff"
-              strokeWidth={image.naturalWidth * 0.006}
-              onPointerDown={handlePointerDown(i)}
-              style={{ cursor: 'grab' }}
-            />
+            <circle key={i} cx={c.x} cy={c.y} r={image.naturalWidth * 0.018} fill="white" stroke="#2563eb" strokeWidth={image.naturalWidth * 0.006}
+              onPointerDown={handlePointerDown(i)} style={{ cursor: 'grab' }} />
           ))}
         </svg>
       </div>
-      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '16px', flexWrap: 'wrap' }}>
-        <button onClick={onDiscard} className="btn-3d" style={{ padding: '10px 18px', backgroundColor: '#888' }}>↩️ Retake</button>
-        <button onClick={resetToFullImage} className="btn-3d" style={{ padding: '10px 18px', backgroundColor: '#607d8b' }}>🖼️ Use Full Image</button>
-        <button onClick={() => onConfirm(corners)} className="btn-3d" style={{ padding: '10px 18px' }}>✅ Confirm Page</button>
+      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '18px', flexWrap: 'wrap' }}>
+        <Button variant="secondary" onClick={onDiscard}>Retake</Button>
+        <Button variant="secondary" onClick={resetToFullImage}>Use full image</Button>
+        <Button onClick={() => onConfirm(corners)}>Confirm page</Button>
       </div>
     </div>
   );
 }
 
-// ── Live camera viewfinder — no OS file picker at all, just a real preview ──
+// ── Live camera viewfinder ────────────────────────────────────────────────
 function CameraCaptureView({ onCapture, onCancel }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -134,11 +129,7 @@ function CameraCaptureView({ onCapture, onCancel }) {
     let cancelled = false;
     setReady(false);
     setError(null);
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
+    if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
 
     navigator.mediaDevices?.getUserMedia({
       video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
@@ -152,9 +143,7 @@ function CameraCaptureView({ onCapture, onCancel }) {
           videoRef.current.onloadedmetadata = () => setReady(true);
         }
       })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || 'Camera access was denied or is unavailable on this device.');
-      });
+      .catch((err) => { if (!cancelled) setError(err.message || 'Camera access was denied or is unavailable on this device.'); });
 
     return () => {
       cancelled = true;
@@ -181,44 +170,38 @@ function CameraCaptureView({ onCapture, onCancel }) {
 
   if (error) {
     return (
-      <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-        <div style={{ fontSize: '40px', marginBottom: '12px' }}>🚫</div>
-        <p style={{ color: '#c62828', marginBottom: '10px', fontWeight: '500' }}>{error}</p>
-        <p style={{ fontSize: '13px', color: '#666', marginBottom: '18px' }}>
-          Check your browser's camera permission for this site, or close this and use "Upload Photo Instead" below.
-        </p>
-        <button onClick={handleCancel} className="btn-3d" style={{ padding: '10px 22px', backgroundColor: '#888' }}>Close</button>
-      </div>
+      <EmptyState
+        icon={<IconClose size={26} />}
+        title="Camera unavailable"
+        description={`${error} Check your browser's camera permission for this site, or close this and use "Upload photo instead" below.`}
+        action={<Button variant="secondary" onClick={handleCancel}>Close</Button>}
+      />
     );
   }
 
   return (
     <div style={{ textAlign: 'center' }}>
-      <div style={{ position: 'relative', maxWidth: '500px', margin: '0 auto', backgroundColor: '#000', borderRadius: '8px', overflow: 'hidden', minHeight: '260px' }}>
+      <div style={{ position: 'relative', maxWidth: '460px', margin: '0 auto', backgroundColor: '#000', borderRadius: 'var(--radius-md)', overflow: 'hidden', minHeight: '240px' }}>
         <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', display: 'block' }} />
         {!ready && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '14px' }}>
-            ⏳ Starting camera…
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 'var(--fs-sm)' }}>
+            Starting camera…
           </div>
         )}
       </div>
-      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '16px', flexWrap: 'wrap' }}>
-        <button onClick={handleCancel} className="btn-3d" style={{ padding: '12px 20px', backgroundColor: '#888' }}>✕ Cancel</button>
-        <button onClick={() => setFacingMode((f) => (f === 'environment' ? 'user' : 'environment'))} className="btn-3d" style={{ padding: '12px 20px', backgroundColor: '#607d8b' }}>
-          🔄 Switch Camera
-        </button>
-        <button onClick={handleCapture} disabled={!ready} className="btn-3d" style={{ padding: '12px 30px', fontWeight: '700' }}>
-          📸 Capture
-        </button>
+      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '18px', flexWrap: 'wrap' }}>
+        <Button variant="secondary" onClick={handleCancel}>Cancel</Button>
+        <Button variant="secondary" onClick={() => setFacingMode((f) => (f === 'environment' ? 'user' : 'environment'))}>Switch camera</Button>
+        <Button disabled={!ready} onClick={handleCapture}>Capture</Button>
       </div>
     </div>
   );
 }
 
 const ScanPage = () => {
-  const [capturedImage, setCapturedImage] = useState(null); // {src, naturalWidth, naturalHeight}
+  const [capturedImage, setCapturedImage] = useState(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [pages, setPages] = useState([]); // [{id, canvas, thumbUrl}]
+  const [pages, setPages] = useState([]);
   const [enhanceEnabled, setEnhanceEnabled] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -226,6 +209,8 @@ const ScanPage = () => {
   const [message, setMessage] = useState(null);
   const [docName, setDocName] = useState('');
   const fileInputRef = useRef(null);
+
+  const MAX_OUTPUT_DIMENSION = 1600;
 
   const handleOpenCameraClick = () => setCameraOpen(true);
   const handleUploadInsteadClick = () => fileInputRef.current?.click();
@@ -237,19 +222,18 @@ const ScanPage = () => {
 
   const handleFileSelected = async (e) => {
     const file = e.target.files?.[0];
-    e.target.value = ''; // allow selecting the same photo again later
+    e.target.value = '';
     if (!file) return;
     try {
       const img = await loadImageFromFile(file);
       setCapturedImage({ src: img.src, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
     } catch (err) {
-      setMessage({ type: 'error', text: '❌ Could not read that photo. Please try again.' });
+      setMessage({ type: 'error', text: 'Could not read that photo. Please try again.' });
     }
   };
 
   const handleConfirmPage = useCallback((corners) => {
     setProcessing(true);
-    // Defer to let the "processing" UI paint before the (synchronous, CPU-bound) warp runs
     setTimeout(() => {
       try {
         const img = new Image();
@@ -261,7 +245,6 @@ const ScanPage = () => {
           srcCtx.drawImage(img, 0, 0);
           const sourceImageData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
 
-          // Derive output size from the quad's own proportions, capped for sane file sizes
           const topW = distance(corners[0], corners[1]);
           const botW = distance(corners[3], corners[2]);
           const leftH = distance(corners[0], corners[3]);
@@ -290,7 +273,7 @@ const ScanPage = () => {
         };
         img.src = capturedImage.src;
       } catch (err) {
-        setMessage({ type: 'error', text: '❌ Failed to process page: ' + err.message });
+        setMessage({ type: 'error', text: 'Failed to process page: ' + err.message });
         setProcessing(false);
       }
     }, 30);
@@ -320,19 +303,17 @@ const ScanPage = () => {
 
       const pdfBlob = doc.output('blob');
       const safeName = docName.trim().replace(/[^a-zA-Z0-9 _-]/g, '').trim();
-      const fileName = safeName
-        ? `${safeName}.pdf`
-        : `Scan_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.pdf`;
+      const fileName = safeName ? `${safeName}.pdf` : `Scan_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.pdf`;
       const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
       await apiService.uploadFile(pdfFile, (pct) => setUploadProgress(pct));
       window.dispatchEvent(new Event('cloudly-files-changed'));
 
-      setMessage({ type: 'success', text: `✅ "${fileName}" uploaded successfully (${pages.length} page${pages.length > 1 ? 's' : ''})!` });
+      setMessage({ type: 'success', text: `"${fileName}" uploaded successfully (${pages.length} page${pages.length > 1 ? 's' : ''}).` });
       setPages([]);
       setDocName('');
     } catch (err) {
-      setMessage({ type: 'error', text: '❌ Upload failed: ' + err.message });
+      setMessage({ type: 'error', text: 'Upload failed: ' + err.message });
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -340,109 +321,90 @@ const ScanPage = () => {
   };
 
   return (
-    <div style={{ maxWidth: '700px', margin: '0 auto', padding: '20px' }}>
-      <h1 className="section-title" style={{ textAlign: 'left' }}>📷 Scan Document</h1>
-      <p className="page-description" style={{ textAlign: 'left', marginBottom: '24px' }}>
-        Capture pages with your camera, straighten and clean them up, then combine into one PDF.
-      </p>
+    <div style={{ maxWidth: '760px' }}>
+      <PageHeader title="Document Scanning" subtitle="Capture pages with your camera, straighten and clean them up, then combine into one PDF." />
 
       {message && (
-        <div style={{
-          padding: '12px 16px', borderRadius: '8px', marginBottom: '20px', fontWeight: '500',
-          backgroundColor: message.type === 'success' ? '#e6f7ec' : '#fdecea',
-          color: message.type === 'success' ? '#1e7e34' : '#c62828',
-        }}>
+        <div className={`ui-banner ui-banner--${message.type === 'success' ? 'success' : 'danger'}`} style={{ marginBottom: '20px' }}>
           {message.text}
         </div>
       )}
 
       <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileSelected} style={{ display: 'none' }} />
 
-      <div className="page-card">
+      <Card>
         {cameraOpen ? (
           <CameraCaptureView onCapture={handleCameraCapture} onCancel={() => setCameraOpen(false)} />
         ) : capturedImage ? (
           processing ? (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#666' }}>⏳ Processing page…</div>
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--c-text-muted)' }}>Processing page…</div>
           ) : (
-            <CornerAdjuster
-              image={capturedImage}
-              onConfirm={handleConfirmPage}
-              onDiscard={() => setCapturedImage(null)}
-            />
+            <CornerAdjuster image={capturedImage} onConfirm={handleConfirmPage} onDiscard={() => setCapturedImage(null)} />
           )
         ) : (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#555', cursor: 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--fs-sm)', color: 'var(--c-text-secondary)', cursor: 'pointer' }}>
                 <input type="checkbox" checked={enhanceEnabled} onChange={(e) => setEnhanceEnabled(e.target.checked)} />
-                ✨ Enhance (clean black &amp; white scan look)
+                Enhance (clean black &amp; white scan look)
               </label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button onClick={handleUploadInsteadClick} className="btn-3d" style={{ padding: '12px 18px', backgroundColor: '#888', fontWeight: '600' }}>
-                  📁 Upload Photo Instead
-                </button>
-                <button onClick={handleOpenCameraClick} className="btn-3d" style={{ padding: '12px 22px', fontWeight: '600' }}>
-                  📷 {pages.length === 0 ? 'Open Camera' : 'Scan Another Page'}
-                </button>
+                <Button variant="secondary" onClick={handleUploadInsteadClick}>Upload photo instead</Button>
+                <Button icon={<IconCamera size={16} />} onClick={handleOpenCameraClick}>
+                  {pages.length === 0 ? 'Open camera' : 'Scan another page'}
+                </Button>
               </div>
             </div>
 
             {pages.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '50px 20px', color: '#aaa' }}>
-                <div style={{ fontSize: '44px', marginBottom: '10px' }}>📄</div>
-                <div>No pages scanned yet. Tap "Open Camera" to start.</div>
+              <div className="cl-dropzone">
+                <IconUploadCloud size={30} />
+                <div className="cl-dropzone-title">No pages scanned yet</div>
+                <div className="cl-dropzone-sub">Tap "Open camera" to start, or upload a photo instead.</div>
               </div>
             ) : (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '14px', marginBottom: '22px' }}>
                   {pages.map((p, i) => (
                     <div key={p.id} style={{ position: 'relative' }}>
-                      <img src={p.thumbUrl} alt={`Page ${i + 1}`} style={{ width: '100%', borderRadius: '6px', border: '1px solid #ddd', display: 'block' }} />
-                      <div style={{ position: 'absolute', top: '4px', left: '4px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', fontSize: '11px', padding: '2px 6px', borderRadius: '4px' }}>
+                      <img src={p.thumbUrl} alt={`Page ${i + 1}`} style={{ width: '100%', borderRadius: 'var(--radius-sm)', border: '1px solid var(--c-border)', display: 'block' }} />
+                      <div style={{ position: 'absolute', top: '4px', left: '4px', backgroundColor: 'rgba(17,24,39,0.65)', color: 'white', fontSize: '11px', padding: '2px 6px', borderRadius: '4px' }}>
                         {i + 1}
                       </div>
-                      <button
-                        onClick={() => handleRemovePage(p.id)}
-                        title="Remove this page"
-                        style={{ position: 'absolute', top: '4px', right: '4px', backgroundColor: '#ef5350', color: 'white', border: 'none', borderRadius: '50%', width: '22px', height: '22px', cursor: 'pointer', fontSize: '12px', lineHeight: '22px' }}
-                      >
-                        ✕
+                      <button onClick={() => handleRemovePage(p.id)} title="Remove this page" className="cl-page-remove">
+                        <IconClose size={12} />
                       </button>
                     </div>
                   ))}
                 </div>
 
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#555', marginBottom: '6px' }}>
-                    Document name
-                  </label>
-                  <input
-                    type="text"
-                    value={docName}
-                    onChange={(e) => setDocName(e.target.value)}
-                    placeholder="e.g., Invoice - March 2026"
-                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '7px', fontSize: '14px', boxSizing: 'border-box' }}
-                  />
+                <div className="ui-field">
+                  <label className="ui-label">Document name</label>
+                  <input type="text" className="ui-input" value={docName} onChange={(e) => setDocName(e.target.value)} placeholder="e.g., Invoice - March 2026" />
                 </div>
 
                 {uploading ? (
                   <div>
-                    <div style={{ height: '8px', backgroundColor: '#eee', borderRadius: '4px', overflow: 'hidden', marginBottom: '10px' }}>
-                      <div style={{ height: '100%', width: `${uploadProgress}%`, backgroundColor: '#0066ff', transition: 'width 0.2s' }} />
+                    <div style={{ height: '8px', backgroundColor: 'var(--c-border)', borderRadius: '4px', overflow: 'hidden', marginBottom: '10px' }}>
+                      <div style={{ height: '100%', width: `${uploadProgress}%`, backgroundColor: 'var(--c-brand)', transition: 'width 0.2s' }} />
                     </div>
-                    <div style={{ textAlign: 'center', color: '#666', fontSize: '13px' }}>⏳ Uploading… {uploadProgress}%</div>
+                    <div style={{ textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 'var(--fs-sm)' }}>Uploading… {uploadProgress}%</div>
                   </div>
                 ) : (
-                  <button onClick={handleFinishAndUpload} className="btn-3d" style={{ width: '100%', padding: '14px', fontWeight: '700', fontSize: '15px' }}>
-                    🧾 Finish &amp; Upload PDF ({pages.length} page{pages.length > 1 ? 's' : ''})
-                  </button>
+                  <Button onClick={handleFinishAndUpload} className="cl-full-width" icon={<IconFile size={16} />}>
+                    Finish &amp; upload PDF ({pages.length} page{pages.length > 1 ? 's' : ''})
+                  </Button>
                 )}
               </>
             )}
           </>
         )}
-      </div>
+      </Card>
+
+      <style>{`
+        .cl-page-remove { position:absolute; top:4px; right:4px; background:rgba(220,38,38,0.9); color:#fff; border:none; border-radius:50%; width:20px; height:20px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .cl-full-width { width: 100%; }
+      `}</style>
     </div>
   );
 };
