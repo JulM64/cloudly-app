@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import cognitoService from '../services/cognitoService';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import logoWordmark from '../assets/logo-wordmark.png';
 
 const LoginPage = ({ onLoginSuccess, onNewPasswordRequired, setMessage }) => {
   const [mode, setMode] = useState('login');
@@ -109,6 +110,7 @@ const LoginPage = ({ onLoginSuccess, onNewPasswordRequired, setMessage }) => {
   return (
     <div style={{ maxWidth: '440px', margin: '48px auto', padding: '0 20px' }}>
       <Card>
+        <img src={logoWordmark} alt="Cloudly" style={{ height: '180px', width: 'auto', display: 'block', margin: '0 auto 20px' }} />
         <h1 style={{ textAlign: 'center', marginBottom: '6px', fontSize: 'var(--fs-xl)', fontWeight: 700, color: 'var(--c-text)' }}>{titles[mode]}</h1>
         <p style={{ textAlign: 'center', marginBottom: '24px', color: 'var(--c-text-muted)', fontSize: 'var(--fs-sm)' }}>{subtitles[mode]}</p>
 
