@@ -1,97 +1,61 @@
 // src/pages/HomePage.js - WITH S3 INTEGRATION
 import React from 'react';
 import FileUpload from '../components/FileUpload';
+import PageHeader from '../components/ui/PageHeader';
+import Card, { CardHeader } from '../components/ui/Card';
+import { IconMail, IconBuilding, IconRoles, IconFolder, IconUploadCloud, IconCheckCircle } from '../components/icons';
 
 const HomePage = ({ user, setMessage }) => {
   return (
-    <div className="upload-wrapper">
-      <h1 className="section-title">Welcome back, {user.firstName}!</h1>
-      <p className="page-description" style={{ marginBottom: '40px' }}>
-        Upload files to your department's S3 bucket
-      </p>
-      
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px', marginTop: '30px' }}>
-        <div className="hover-card" style={{
-          backgroundColor: 'white',
-          borderRadius: '10px',
-          padding: '25px',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-        }}>
-          <h3 style={{ color: '#333', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            📤 File Upload
-          </h3>
-          <FileUpload user={user} onUploadSuccess={setMessage} />
-        </div>
-        
-        <div className="hover-card" style={{
-          backgroundColor: 'white',
-          borderRadius: '10px',
-          padding: '25px',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-        }}>
-          <h3 style={{ color: '#333', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            📊 Your Info
-          </h3>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            <div style={{
-              padding: '12px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '8px',
-              borderLeft: '4px solid #0066ff'
-            }}>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Email</div>
-              <div style={{ fontWeight: '600', color: '#333' }}>{user.email}</div>
-            </div>
-            
-            <div style={{
-              padding: '12px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '8px',
-              borderLeft: '4px solid #4caf50'
-            }}>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Department</div>
-              <div style={{ fontWeight: '600', color: '#333' }}>{user.department}</div>
-            </div>
-            
-            <div style={{
-              padding: '12px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '8px',
-              borderLeft: '4px solid #9c27b0'
-            }}>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Role</div>
-              <div style={{ fontWeight: '600', color: '#333', textTransform: 'capitalize' }}>
-                {user.role.toLowerCase().replace('_', ' ')}
-              </div>
-            </div>
+    <div>
+      <PageHeader title={`Welcome back, ${user.firstName}`} subtitle="Upload files to your department's storage." />
 
-            <div style={{
-              padding: '12px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '8px',
-              borderLeft: '4px solid #ff9800'
-            }}>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>S3 Bucket</div>
-              <div style={{ fontWeight: '600', color: '#333', fontSize: '13px' }}>
-                cloudly-dept-{user.department?.toLowerCase()}
-              </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px' }}>
+        <Card>
+          <CardHeader title="File upload" />
+          <FileUpload user={user} onUploadSuccess={setMessage} />
+        </Card>
+
+        <Card>
+          <CardHeader title="Your info" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div className="cl-info-row">
+              <IconMail size={16} />
+              <div><div className="cl-info-label">Email</div><div className="cl-info-value">{user.email}</div></div>
+            </div>
+            <div className="cl-info-row">
+              <IconBuilding size={16} />
+              <div><div className="cl-info-label">Department</div><div className="cl-info-value">{user.department}</div></div>
+            </div>
+            <div className="cl-info-row">
+              <IconRoles size={16} />
+              <div><div className="cl-info-label">Role</div><div className="cl-info-value" style={{ textTransform: 'capitalize' }}>{user.role.toLowerCase().replace('_', ' ')}</div></div>
+            </div>
+            <div className="cl-info-row">
+              <IconFolder size={16} />
+              <div><div className="cl-info-label">S3 bucket</div><div className="cl-info-value" style={{ fontSize: '12px', fontFamily: 'monospace' }}>cloudly-dept-{user.department?.toLowerCase()}</div></div>
             </div>
           </div>
-          
-          <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#e7f3ff', borderRadius: '8px' }}>
-            <div style={{ fontSize: '13px', color: '#0066ff', fontWeight: '600', marginBottom: '8px' }}>
-              ℹ️ Upload Information
+
+          <div className="ui-banner ui-banner--info" style={{ marginTop: '20px', display: 'block' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontWeight: 600 }}>
+              <IconUploadCloud size={15} /> Upload information
             </div>
-            <ul style={{ fontSize: '12px', color: '#666', margin: 0, paddingLeft: '20px' }}>
+            <ul style={{ fontSize: 'var(--fs-xs)', margin: 0, paddingLeft: '18px' }}>
               <li>Files stored in AWS S3</li>
               <li>Department-based buckets</li>
               <li>Secure cloud storage</li>
               <li>Max size: 100MB per file</li>
             </ul>
           </div>
-        </div>
+        </Card>
       </div>
+
+      <style>{`
+        .cl-info-row { display:flex; align-items:flex-start; gap:10px; padding:12px; background:var(--c-bg); border-radius:var(--radius-md); color: var(--c-text-faint); }
+        .cl-info-label { font-size:11px; color:var(--c-text-muted); margin-bottom:2px; }
+        .cl-info-value { font-weight:600; color:var(--c-text); font-size: var(--fs-sm); }
+      `}</style>
     </div>
   );
 };

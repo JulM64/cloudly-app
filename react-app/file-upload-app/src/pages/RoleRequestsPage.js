@@ -1,35 +1,20 @@
 // src/pages/RoleRequestsPage.js
 import React, { useState, useEffect } from 'react';
 import apiService from '../services/apiService';
+import PageHeader from '../components/ui/PageHeader';
+import Card from '../components/ui/Card';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import { IconCheckCircle, IconXCircle, IconFolder, IconClose } from '../components/icons';
 
-const ROLE_CONFIG = {
-  SUPER_ADMIN: { label: 'Super Admin', color: '#9c27b0', bg: '#f3e5f5', icon: '👑' },
-  DEPT_HEAD:   { label: 'Dept Head',   color: '#0066ff', bg: '#e3f2fd', icon: '🏢' },
-  UNIT_HEAD:   { label: 'Unit Head',   color: '#4caf50', bg: '#e8f5e9', icon: '🔷' },
-  MEMBER:      { label: 'Member',      color: '#ff9800', bg: '#fff3e0', icon: '👤' },
-};
+const ROLE_TONE = { SUPER_ADMIN: 'brand', DEPT_HEAD: 'info', UNIT_HEAD: 'success', MEMBER: 'neutral' };
+const ROLE_LABEL = { SUPER_ADMIN: 'Super Admin', DEPT_HEAD: 'Dept Head', UNIT_HEAD: 'Unit Head', MEMBER: 'Member' };
+const RoleBadge = ({ role }) => <Badge tone={ROLE_TONE[role] || 'neutral'}>{ROLE_LABEL[role] || role}</Badge>;
 
-const RoleBadge = ({ role }) => {
-  const cfg = ROLE_CONFIG[role] || ROLE_CONFIG.MEMBER;
-  return (
-    <span style={{ padding: '3px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700', backgroundColor: cfg.bg, color: cfg.color }}>
-      {cfg.icon} {cfg.label}
-    </span>
-  );
-};
-
-const StatusBadge = ({ status }) => {
-  const cfg = {
-    PENDING:  { color: '#ff9800', bg: '#fff3e0', label: '⏳ Pending'  },
-    APPROVED: { color: '#4caf50', bg: '#e8f5e9', label: '✅ Approved' },
-    REJECTED: { color: '#ef5350', bg: '#ffeaea', label: '❌ Rejected' },
-  }[status] || { color: '#888', bg: '#f5f5f5', label: status };
-  return (
-    <span style={{ padding: '3px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700', backgroundColor: cfg.bg, color: cfg.color }}>
-      {cfg.label}
-    </span>
-  );
-};
+const STATUS_TONE = { PENDING: 'warning', APPROVED: 'success', REJECTED: 'danger' };
+const STATUS_LABEL = { PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected' };
+const StatusBadge = ({ status }) => <Badge tone={STATUS_TONE[status] || 'neutral'}>{STATUS_LABEL[status] || status}</Badge>;
 
 const RoleRequestsPage = ({ user }) => {
   const [requests, setRequests]       = useState([]);
@@ -47,11 +32,8 @@ const RoleRequestsPage = ({ user }) => {
       setLoading(true);
       const res = await apiService.getRoleRequests();
       setRequests(res.requests || []);
-    } catch (err) {
-      setMessage('❌ Failed to load requests: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { setMessage('Failed to load requests: ' + err.message); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { loadRequests(); }, []);
@@ -61,13 +43,10 @@ const RoleRequestsPage = ({ user }) => {
     try {
       setActionLoading(requestId);
       await apiService.approveRoleRequest(requestId);
-      setMessage('✅ Role change approved and applied!');
+      setMessage('Role change approved and applied.');
       await loadRequests();
-    } catch (err) {
-      setMessage('❌ Failed to approve: ' + err.message);
-    } finally {
-      setActionLoading(null);
-    }
+    } catch (err) { setMessage('Failed to approve: ' + err.message); }
+    finally { setActionLoading(null); }
   };
 
   const handleReject = async () => {
@@ -75,127 +54,85 @@ const RoleRequestsPage = ({ user }) => {
     try {
       setActionLoading(rejectModal.requestId);
       await apiService.rejectRoleRequest(rejectModal.requestId, rejectReason);
-      setMessage('✅ Role change request rejected.');
+      setMessage('Role change request rejected.');
       setRejectModal(null);
       setRejectReason('');
       await loadRequests();
-    } catch (err) {
-      setMessage('❌ Failed to reject: ' + err.message);
-    } finally {
-      setActionLoading(null);
-    }
+    } catch (err) { setMessage('Failed to reject: ' + err.message); }
+    finally { setActionLoading(null); }
   };
 
   const filtered = requests.filter(r => filterStatus === 'ALL' || r.status === filterStatus);
   const pendingCount = requests.filter(r => r.status === 'PENDING').length;
 
-  const inp = { width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '7px', fontSize: '14px', boxSizing: 'border-box' };
-  const btn = (color = '#0066ff') => ({ padding: '8px 18px', backgroundColor: color, color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' });
-
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '20px' }}>
-      <h1 className="section-title" style={{ marginBottom: '6px' }}>🔐 Role Change Requests</h1>
-      <p className="page-description" style={{ marginBottom: '28px', color: '#666' }}>
-        {isAdmin ? 'Review and approve role change proposals from department heads' : 'Track role change proposals you have submitted'}
-      </p>
+    <div>
+      <PageHeader
+        title="Role change requests"
+        subtitle={isAdmin ? 'Review and approve role change proposals from department heads.' : 'Track role change proposals you have submitted.'}
+      />
 
       {message && (
-        <div style={{ padding: '12px 18px', borderRadius: '8px', marginBottom: '20px', fontSize: '14px', fontWeight: '500', backgroundColor: message.includes('✅') ? '#e8f5e9' : '#ffeaea', color: message.includes('✅') ? '#2e7d32' : '#c62828' }}>
-          {message}
-          <button onClick={() => setMessage('')} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }}>✕</button>
+        <div className={`ui-banner ui-banner--${message.toLowerCase().includes('fail') ? 'danger' : 'success'}`} style={{ marginBottom: '20px' }}>
+          <span>{message}</span>
+          <button className="ui-banner-close" onClick={() => setMessage('')}><IconClose size={14} /></button>
         </div>
       )}
 
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '16px', marginBottom: '24px' }}>
         {[
-          { label: 'Pending',  value: requests.filter(r=>r.status==='PENDING').length,  color: '#ff9800', bg: '#fff3e0', icon: '⏳' },
-          { label: 'Approved', value: requests.filter(r=>r.status==='APPROVED').length, color: '#4caf50', bg: '#e8f5e9', icon: '✅' },
-          { label: 'Rejected', value: requests.filter(r=>r.status==='REJECTED').length, color: '#ef5350', bg: '#ffeaea', icon: '❌' },
-        ].map((s, i) => (
-          <div key={i} onClick={() => setFilterStatus(s.label.toUpperCase())}
-            style={{ padding: '20px', backgroundColor: s.bg, borderRadius: '12px', cursor: 'pointer', border: `2px solid ${filterStatus === s.label.toUpperCase() ? s.color : 'transparent'}`, transition: 'all 0.2s' }}>
-            <div style={{ fontSize: '28px', fontWeight: '800', color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: '13px', color: '#555', marginTop: '4px' }}>{s.icon} {s.label}</div>
-          </div>
+          { label: 'Pending', value: requests.filter(r => r.status === 'PENDING').length, tone: 'warning', key: 'PENDING' },
+          { label: 'Approved', value: requests.filter(r => r.status === 'APPROVED').length, tone: 'success', key: 'APPROVED' },
+          { label: 'Rejected', value: requests.filter(r => r.status === 'REJECTED').length, tone: 'danger', key: 'REJECTED' },
+        ].map((s) => (
+          <Card key={s.key} onClick={() => setFilterStatus(s.key)} style={{ cursor: 'pointer', borderColor: filterStatus === s.key ? 'var(--c-brand)' : 'var(--c-border)' }}>
+            <div style={{ fontSize: 'var(--fs-2xl)', fontWeight: 800, color: 'var(--c-text)' }}>{s.value}</div>
+            <div style={{ marginTop: '6px' }}><Badge tone={s.tone}>{s.label}</Badge></div>
+          </Card>
         ))}
       </div>
 
-      {/* Filter tabs */}
-      <div className="page-card">
-        <div style={{ display: 'flex', gap: '0', marginBottom: '24px', border: '1px solid #ddd', borderRadius: '8px', overflow: 'hidden' }}>
-          {['ALL','PENDING','APPROVED','REJECTED'].map(f => (
-            <button key={f} onClick={() => setFilterStatus(f)} style={{
-              flex: 1, padding: '10px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
-              backgroundColor: filterStatus === f ? '#0066ff' : 'white',
-              color: filterStatus === f ? 'white' : '#555',
-            }}>
-              {f === 'ALL' ? `All (${requests.length})` : f === 'PENDING' ? `⏳ Pending (${pendingCount})` : f === 'APPROVED' ? `✅ Approved` : `❌ Rejected`}
+      <Card>
+        <div className="ui-tabs">
+          {['ALL', 'PENDING', 'APPROVED', 'REJECTED'].map(f => (
+            <button key={f} type="button" className={`ui-tab ${filterStatus === f ? 'ui-tab--active' : ''}`} onClick={() => setFilterStatus(f)}>
+              {f === 'ALL' ? `All (${requests.length})` : f === 'PENDING' ? `Pending (${pendingCount})` : f === 'APPROVED' ? 'Approved' : 'Rejected'}
             </button>
           ))}
         </div>
 
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '50px', color: '#888' }}>⏳ Loading requests…</div>
+          <div style={{ textAlign: 'center', padding: '50px', color: 'var(--c-text-muted)' }}>Loading requests…</div>
         ) : filtered.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '50px', color: '#aaa' }}>
-            <div style={{ fontSize: '44px', marginBottom: '10px' }}>📋</div>
-            <div>No {filterStatus.toLowerCase()} requests found.</div>
-          </div>
+          <EmptyState icon={<IconFolder size={28} />} title={`No ${filterStatus.toLowerCase()} requests found`} />
         ) : (
           <div>
             {filtered.map(req => (
-              <div key={req.requestId} style={{
-                border: '1px solid #eee', borderRadius: '12px', padding: '20px', marginBottom: '14px',
-                backgroundColor: req.status === 'PENDING' ? '#fffbf0' : 'white',
-                borderLeft: `4px solid ${req.status === 'PENDING' ? '#ff9800' : req.status === 'APPROVED' ? '#4caf50' : '#ef5350'}`,
-              }}>
+              <div key={req.requestId} className="cl-request-row" style={{ borderLeftColor: req.status === 'PENDING' ? 'var(--c-warning)' : req.status === 'APPROVED' ? 'var(--c-success)' : 'var(--c-danger)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  {/* Left side — request info */}
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: '700', fontSize: '15px' }}>{req.targetName || req.targetEmail}</span>
+                      <span style={{ fontWeight: 700, fontSize: 'var(--fs-md)' }}>{req.targetName || req.targetEmail}</span>
                       <StatusBadge status={req.status} />
                     </div>
-                    <div style={{ fontSize: '13px', color: '#666', marginBottom: '6px' }}>📧 {req.targetEmail}</div>
+                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-muted)', marginBottom: '6px' }}>{req.targetEmail}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '13px', color: '#555' }}>Role change to:</span>
+                      <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-secondary)' }}>Role change to:</span>
                       <RoleBadge role={req.newRole} />
                     </div>
-                    {req.department && (
-                      <div style={{ fontSize: '13px', color: '#555', marginBottom: '6px' }}>🏢 Department: <strong>{req.department}</strong></div>
-                    )}
-                    {req.reason && (
-                      <div style={{ fontSize: '13px', color: '#555', marginBottom: '6px', fontStyle: 'italic' }}>💬 "{req.reason}"</div>
-                    )}
-                    <div style={{ fontSize: '12px', color: '#aaa', marginTop: '8px' }}>
-                      Proposed by <strong>{req.proposedBy}</strong> ({req.proposedByRole}) · {new Date(req.createdAt).toLocaleString()}
+                    {req.department && <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-secondary)', marginBottom: '6px' }}>Department: <strong>{req.department}</strong></div>}
+                    {req.reason && <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-secondary)', marginBottom: '6px', fontStyle: 'italic' }}>"{req.reason}"</div>}
+                    <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--c-text-faint)', marginTop: '8px' }}>
+                      Proposed by <strong>{req.proposedBy}</strong> ({req.proposedByRole}) &middot; {new Date(req.createdAt).toLocaleString()}
                     </div>
-                    {req.approvedBy && (
-                      <div style={{ fontSize: '12px', color: '#4caf50', marginTop: '4px' }}>✅ Approved by {req.approvedBy} · {new Date(req.approvedAt).toLocaleString()}</div>
-                    )}
-                    {req.rejectedBy && (
-                      <div style={{ fontSize: '12px', color: '#ef5350', marginTop: '4px' }}>❌ Rejected by {req.rejectedBy} · {req.rejectReason && `Reason: ${req.rejectReason}`}</div>
-                    )}
+                    {req.approvedBy && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--c-success)', marginTop: '4px' }}>Approved by {req.approvedBy} &middot; {new Date(req.approvedAt).toLocaleString()}</div>}
+                    {req.rejectedBy && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--c-danger)', marginTop: '4px' }}>Rejected by {req.rejectedBy}{req.rejectReason && ` — ${req.rejectReason}`}</div>}
                   </div>
 
-                  {/* Right side — actions (SUPER_ADMIN only, PENDING only) */}
                   {isAdmin && req.status === 'PENDING' && (
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <button
-                        onClick={() => handleApprove(req.requestId)}
-                        disabled={actionLoading === req.requestId}
-                        style={{ ...btn('#4caf50'), opacity: actionLoading === req.requestId ? 0.6 : 1 }}
-                      >
-                        {actionLoading === req.requestId ? '⏳' : '✅ Approve'}
-                      </button>
-                      <button
-                        onClick={() => { setRejectModal(req); setRejectReason(''); }}
-                        disabled={actionLoading === req.requestId}
-                        style={{ ...btn('#ef5350'), opacity: actionLoading === req.requestId ? 0.6 : 1 }}
-                      >
-                        ❌ Reject
-                      </button>
+                      <Button variant="success" size="sm" icon={<IconCheckCircle size={14} />} loading={actionLoading === req.requestId} onClick={() => handleApprove(req.requestId)}>Approve</Button>
+                      <Button variant="danger" size="sm" icon={<IconXCircle size={14} />} disabled={actionLoading === req.requestId} onClick={() => { setRejectModal(req); setRejectReason(''); }}>Reject</Button>
                     </div>
                   )}
                 </div>
@@ -203,35 +140,28 @@ const RoleRequestsPage = ({ user }) => {
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
-      {/* Reject modal */}
       {rejectModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ backgroundColor: 'white', borderRadius: '14px', padding: '32px', width: '90%', maxWidth: '480px', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
-            <h2 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '18px' }}>❌ Reject Role Request</h2>
-            <p style={{ fontSize: '14px', color: '#555', marginBottom: '16px' }}>
-              Rejecting role change for <strong>{rejectModal.targetName}</strong> → <strong>{rejectModal.newRole}</strong>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(17,24,39,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+          <Card style={{ width: '100%', maxWidth: '460px' }}>
+            <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, marginBottom: '16px' }}>Reject role request</h2>
+            <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text-secondary)', marginBottom: '16px' }}>
+              Rejecting role change for <strong>{rejectModal.targetName}</strong> &rarr; <strong>{rejectModal.newRole}</strong>
             </p>
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600', color: '#555' }}>Reason (optional)</label>
-              <textarea
-                value={rejectReason}
-                onChange={e => setRejectReason(e.target.value)}
-                placeholder="Explain why this request is being rejected…"
-                rows={3}
-                style={{ ...inp, resize: 'vertical' }}
-              />
+            <div className="ui-field">
+              <label className="ui-label">Reason (optional)</label>
+              <textarea className="ui-textarea" value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="Explain why this request is being rejected…" rows={3} />
             </div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setRejectModal(null)} style={{ ...btn('#888') }}>Cancel</button>
-              <button onClick={handleReject} disabled={!!actionLoading} style={{ ...btn('#ef5350'), opacity: actionLoading ? 0.6 : 1 }}>
-                {actionLoading ? '⏳' : '❌ Confirm Reject'}
-              </button>
+              <Button variant="secondary" onClick={() => setRejectModal(null)}>Cancel</Button>
+              <Button variant="danger" loading={!!actionLoading} onClick={handleReject}>Confirm reject</Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
+
+      <style>{`.cl-request-row { border:1px solid var(--c-border); border-left-width:4px; border-radius:var(--radius-md); padding:18px; margin-bottom:12px; }`}</style>
     </div>
   );
 };
