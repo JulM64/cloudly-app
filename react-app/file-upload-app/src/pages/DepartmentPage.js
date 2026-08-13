@@ -13,7 +13,7 @@ import Badge from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
 import {
   IconBuilding, IconLayers, IconUsers, IconCheckCircle, IconPlus,
-  IconEdit, IconTrash, IconClose, IconFolder, IconFileText,
+  IconEdit, IconTrash, IconClose, IconFolder, IconFileText, IconRefresh,
 } from '../components/icons';
 
 const ROLE_CONFIG = {
@@ -134,6 +134,19 @@ const DepartmentPage = ({ user }) => {
   const [createManagerTempPass, setCreateManagerTempPass] = useState('');
 
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [resyncingId, setResyncingId] = useState(null);
+
+  const handleResync = async (dept) => {
+    try {
+      setResyncingId(dept.id);
+      const res = await apiService.resyncDepartmentMembers(dept.id);
+      alert(res.message);
+    } catch (err) {
+      alert('Resync failed: ' + err.message);
+    } finally {
+      setResyncingId(null);
+    }
+  };
 
   const isAdmin    = user?.role === 'SUPER_ADMIN';
   const isDeptHead = user?.role === 'DEPT_HEAD';
@@ -481,6 +494,7 @@ const DepartmentPage = ({ user }) => {
                 <div className="cl-dept-actions">
                   {(isAdmin || isDeptHead) && <Button variant="secondary" size="sm" icon={<IconEdit size={14} />} onClick={() => openEdit(dept)} disabled={loading}>Edit</Button>}
                   <Button variant="secondary" size="sm" icon={<IconUsers size={14} />} onClick={() => openMembers(dept)} disabled={loading}>Members</Button>
+                  <Button variant="secondary" size="sm" icon={<IconRefresh size={14} />} loading={resyncingId === dept.id} onClick={() => handleResync(dept)}>Resync</Button>
                   {isAdmin && <Button variant="danger" size="sm" icon={<IconTrash size={14} />} onClick={() => handleDelete(dept.id)} disabled={loading} />}
                 </div>
               </Card>

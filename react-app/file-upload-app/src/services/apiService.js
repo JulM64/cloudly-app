@@ -114,6 +114,7 @@ class ApiService {
   createDepartment(data)     { return this.request('/departments', { method: 'POST', body: data }); }
   updateDepartment(id, data) { return this.request(`/departments/${id}`, { method: 'PUT', body: data }); }
   deleteDepartment(id)       { return this.request(`/departments/${id}`, { method: 'DELETE' }); }
+  resyncDepartmentMembers(id) { return this.request(`/departments/${id}/resync-members`, { method: 'POST' }); }
 
   // ── USERS ──────────────────────────────────────────────────────────────────
   getUsers(lastKey = null, limit = 60) {
@@ -223,4 +224,4 @@ class ApiService {
   isAuthenticated() { return !!this.getAuthToken(); }
 }
 
-export default new ApiService(); 
+export default new ApiService();
