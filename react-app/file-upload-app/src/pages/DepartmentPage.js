@@ -495,7 +495,7 @@ const DepartmentPage = ({ user }) => {
                   {(isAdmin || isDeptHead) && <Button variant="secondary" size="sm" icon={<IconEdit size={14} />} onClick={() => openEdit(dept)} disabled={loading}>Edit</Button>}
                   <Button variant="secondary" size="sm" icon={<IconUsers size={14} />} onClick={() => openMembers(dept)} disabled={loading}>Members</Button>
                   <Button variant="secondary" size="sm" icon={<IconRefresh size={14} />} loading={resyncingId === dept.id} onClick={() => handleResync(dept)}>Resync</Button>
-                  {isAdmin && <Button variant="danger" size="sm" icon={<IconTrash size={14} />} onClick={() => handleDelete(dept.id)} disabled={loading} />}
+                  {isAdmin && <Button variant="danger" size="sm" icon={<IconTrash size={14} />} onClick={() => handleDelete(dept.id)} disabled={loading}>Delete</Button>}
                 </div>
               </Card>
             );
@@ -751,7 +751,7 @@ const DepartmentPage = ({ user }) => {
 
       <style>{`
         .cl-settings-heading { margin: 0 0 18px; font-size: var(--fs-lg); font-weight: 600; color: var(--c-text); }
-        .cl-dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .cl-dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; }
         .cl-dept-card { display: flex; flex-direction: column; }
         .cl-dept-card-top { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
         .cl-dept-card-icon { width: 34px; height: 34px; border-radius: var(--radius-sm); background: var(--c-brand-tint); color: var(--c-brand); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -765,7 +765,8 @@ const DepartmentPage = ({ user }) => {
         .cl-dept-link { cursor: pointer; color: var(--c-brand); }
         .cl-dept-manager { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
         .cl-dept-manager-label { font-size: var(--fs-xs); color: var(--c-text-faint); }
-        .cl-dept-actions { display: flex; gap: 8px; margin-top: auto; }
+        .cl-dept-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 4px; }
+        .cl-dept-actions .ui-btn { flex: 0 0 auto; }
         .cl-manager-option { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--c-border); display: flex; align-items: center; gap: 10px; }
         .cl-manager-option:hover { background: var(--c-bg); }
         .cl-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
