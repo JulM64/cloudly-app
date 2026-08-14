@@ -7,6 +7,7 @@ import './styles/App.css';
 
 import cognitoService from './services/cognitoService';
 import s3Service from './services/s3Service';
+import apiService from './services/apiService';
 
 import Navigation from './components/Navigation';
 import { IconCheckCircle, IconAlertCircle, IconXCircle, IconClose } from './components/icons';
@@ -41,6 +42,7 @@ function App() {
           await cognitoService.getCurrentUser();
           if (userData.idToken) await s3Service.initialize(userData.idToken);
           setCurrentUser(userData);
+          fetchAndApplyAvatar();
         } catch {
           localStorage.removeItem('cloudly_user');
           setCurrentUser(null);
@@ -49,6 +51,41 @@ function App() {
       setLoading(false);
     };
     initAuth();
+  }, []);
+
+  // Single source of truth for the avatar: fetched once here (same reliable
+  // call SettingsPage already uses successfully), then carried on
+  // currentUser like any other field (department, role, etc.) so every
+  // consumer — Navigation included — just reads a prop instead of running
+  // its own independent fetch that can fail silently.
+  const fetchAndApplyAvatar = async () => {
+    try {
+      const res = await apiService.getMyAvatar();
+      if (res.avatarBase64) {
+        setCurrentUser((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev, avatar: res.avatarBase64 };
+          try {
+            const stored = JSON.parse(localStorage.getItem('cloudly_user') || '{}');
+            localStorage.setItem('cloudly_user', JSON.stringify({ ...stored, avatar: res.avatarBase64 }));
+          } catch (e) { console.warn('Could not persist avatar to localStorage', e); }
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.warn('Could not fetch avatar:', err.message);
+    }
+  };
+
+  // SettingsPage dispatches this the instant a photo is uploaded/removed —
+  // update currentUser immediately so every consumer re-renders with the
+  // new photo, without needing a reload.
+  useEffect(() => {
+    const onAvatarUpdated = (e) => {
+      setCurrentUser((prev) => (prev ? { ...prev, avatar: e.detail?.avatar || null } : prev));
+    };
+    window.addEventListener('cloudly-avatar-updated', onAvatarUpdated);
+    return () => window.removeEventListener('cloudly-avatar-updated', onAvatarUpdated);
   }, []);
 
   const handleSignOut = () => {
@@ -62,10 +99,12 @@ function App() {
     try {
       await s3Service.initialize(userData.idToken);
       setCurrentUser(userData);
+      fetchAndApplyAvatar();
       setMessage('Login successful.');
       setTimeout(() => setMessage(''), 3000);
     } catch {
       setCurrentUser(userData);
+      fetchAndApplyAvatar();
     }
   };
 
@@ -80,6 +119,7 @@ function App() {
       const userData = await cognitoService.completeNewPassword(pendingCognitoUser.cognitoUser, newPassword, pendingCognitoUser.userAttributes);
       await s3Service.initialize(userData.idToken);
       setCurrentUser(userData);
+      fetchAndApplyAvatar();
       setNewPasswordRequired(false);
       setPendingCognitoUser(null);
       setMessage('Password changed successfully.');
