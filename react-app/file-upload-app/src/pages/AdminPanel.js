@@ -148,6 +148,7 @@ const AdminPanel = ({ user }) => {
       setPendingFileDeleteCount(prev => Math.max(0, prev - 1));
       setFiles(prev => prev.filter(f => f.fileId !== reqItem.fileId));
       window.dispatchEvent(new Event('cloudly-files-changed'));
+      window.dispatchEvent(new Event('cloudly-notifications-changed'));
       setFileMsg(`Approved removal of "${reqItem.fileName}"`);
       setTimeout(() => setFileMsg(''), 3000);
     } catch (err) { setFileMsg(`Failed to approve: ${err.message}`); }
@@ -162,6 +163,7 @@ const AdminPanel = ({ user }) => {
       await apiService.rejectFileDeleteRequest(reqItem.requestId, reason);
       setFileDeleteRequests(prev => prev.map(r => r.requestId === reqItem.requestId ? { ...r, status: 'REJECTED', rejectReason: reason } : r));
       setPendingFileDeleteCount(prev => Math.max(0, prev - 1));
+      window.dispatchEvent(new Event('cloudly-notifications-changed'));
       setFileMsg(`Rejected removal request for "${reqItem.fileName}"`);
       setTimeout(() => setFileMsg(''), 3000);
     } catch (err) { setFileMsg(`Failed to reject: ${err.message}`); }

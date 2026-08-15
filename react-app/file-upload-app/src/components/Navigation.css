@@ -95,6 +95,7 @@
 .cl-topbar-actions { display: flex; align-items: center; gap: var(--space-3); }
 
 .cl-icon-btn {
+  position: relative;
   width: 36px; height: 36px;
   border-radius: 50%;
   border: none;
@@ -104,6 +105,24 @@
   cursor: pointer;
 }
 .cl-icon-btn:hover { background: var(--c-bg); color: var(--c-text); }
+
+.cl-notification-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--c-danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  border: 2px solid var(--c-surface);
+  box-sizing: content-box;
+}
 
 .cl-user-menu { position: relative; }
 .cl-user-trigger { border: none; background: none; padding: 0; cursor: pointer; display: flex; }

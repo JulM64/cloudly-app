@@ -10,6 +10,7 @@ import {
   IconFolder,
 } from './icons';
 import Avatar from './Avatar';
+import apiService from '../services/apiService';
 import './Navigation.css';
 
 const NAV_ITEMS = [
@@ -33,6 +34,7 @@ const ROLE_LABEL = {
 const Navigation = ({ currentUser, signOut }) => {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificationCount, setNotificationCount] = useState(0);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -40,6 +42,50 @@ const Navigation = ({ currentUser, signOut }) => {
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
+
+  // Notification badge = pending items this role can actually act on:
+  // Super Admin sees pending role-change AND file-delete requests (only
+  // role that can approve both); Dept Head sees pending role-change
+  // requests scoped to their own department. Unit Head / Member have
+  // nothing actionable via notifications today, so they get no badge.
+  useEffect(() => {
+    if (!currentUser) return;
+    const role = currentUser.role;
+    if (!['SUPER_ADMIN', 'DEPT_HEAD'].includes(role)) {
+      setNotificationCount(0);
+      return;
+    }
+
+    let cancelled = false;
+    const loadCount = async () => {
+      try {
+        const roleCountPromise = apiService.getPendingRoleCount();
+        const fileCountPromise = role === 'SUPER_ADMIN' ? apiService.getFileDeletePendingCount() : Promise.resolve({ pendingCount: 0 });
+        const [roleRes, fileRes] = await Promise.all([roleCountPromise, fileCountPromise]);
+        if (!cancelled) setNotificationCount((roleRes.pendingCount || 0) + (fileRes.pendingCount || 0));
+      } catch (err) {
+        console.warn('Could not load notification count:', err.message);
+      }
+    };
+
+    loadCount();
+    const interval = setInterval(loadCount, 60000);
+    window.addEventListener('focus', loadCount);
+    // Fired the instant a role-change or file-delete request is
+    // approved/rejected (see RoleRequestsPage.js / AdminPanel.js) — refresh
+    // right away instead of waiting on the 60s timer or a manual reload.
+    window.addEventListener('cloudly-notifications-changed', loadCount);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('focus', loadCount);
+      window.removeEventListener('cloudly-notifications-changed', loadCount);
+    };
+  }, [currentUser?.userId, currentUser?.role]);
+
+  const handleBellClick = () => {
+    if (['SUPER_ADMIN', 'DEPT_HEAD'].includes(currentUser.role)) navigate('/role-requests');
+  };
 
   if (!currentUser) return null;
 
@@ -78,7 +124,12 @@ const Navigation = ({ currentUser, signOut }) => {
         </div>
 
         <div className="cl-topbar-actions">
-          <button type="button" className="cl-icon-btn" aria-label="Notifications"><IconBell size={18} /></button>
+          <button type="button" className="cl-icon-btn" aria-label={notificationCount > 0 ? `${notificationCount} notifications` : 'Notifications'} onClick={handleBellClick}>
+            <IconBell size={18} />
+            {notificationCount > 0 && (
+              <span className="cl-notification-badge">{notificationCount > 9 ? '9+' : notificationCount}</span>
+            )}
+          </button>
           <button type="button" className="cl-icon-btn" aria-label="Help"><IconHelp size={18} /></button>
 
           <div className="cl-user-menu" ref={menuRef}>

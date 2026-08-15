@@ -45,6 +45,7 @@ const RoleRequestsPage = ({ user }) => {
       await apiService.approveRoleRequest(requestId);
       setMessage('Role change approved and applied.');
       await loadRequests();
+      window.dispatchEvent(new Event('cloudly-notifications-changed'));
     } catch (err) { setMessage('Failed to approve: ' + err.message); }
     finally { setActionLoading(null); }
   };
@@ -58,6 +59,7 @@ const RoleRequestsPage = ({ user }) => {
       setRejectModal(null);
       setRejectReason('');
       await loadRequests();
+      window.dispatchEvent(new Event('cloudly-notifications-changed'));
     } catch (err) { setMessage('Failed to reject: ' + err.message); }
     finally { setActionLoading(null); }
   };
