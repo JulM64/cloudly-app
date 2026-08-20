@@ -171,7 +171,7 @@ const DashboardPage = ({ user }) => {
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', marginTop: '24px' }}>
+          <div className="cl-split-layout" style={{ marginTop: '24px' }}>
             <Card>
               <CardHeader title="Recent Files" />
               {!stats.recentUploads || stats.recentUploads.length === 0 ? (

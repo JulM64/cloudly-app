@@ -4,6 +4,7 @@ import apiService from '../services/apiService';
 import cognitoService from '../services/cognitoService';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import logoWordmark from '../assets/logo-wordmark.png';
 
 const OrgSignupPage = ({ onSignupComplete }) => {
   const [step, setStep] = useState('details');
@@ -52,6 +53,7 @@ const OrgSignupPage = ({ onSignupComplete }) => {
   return (
     <div style={{ maxWidth: '460px', margin: '48px auto', padding: '0 20px' }}>
       <Card>
+        <img src={logoWordmark} alt="Cloudly" style={{ height: '48px', width: 'auto', display: 'block', marginBottom: '20px' }} />
         <h1 style={{ textAlign: 'left', marginBottom: '4px', fontSize: 'var(--fs-xl)', fontWeight: 700, color: 'var(--c-text)' }}>
           {step === 'details' ? 'Create your organization' : 'Verify your email'}
         </h1>
@@ -67,7 +69,7 @@ const OrgSignupPage = ({ onSignupComplete }) => {
               <label className="ui-label">Organization name</label>
               <input className="ui-input" type="text" value={form.orgName} onChange={(e) => handleChange('orgName', e.target.value)} placeholder="e.g., Acme Corp" />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <div className="cl-form-pair">
               <div className="ui-field">
                 <label className="ui-label">First name</label>
                 <input className="ui-input" type="text" value={form.firstName} onChange={(e) => handleChange('firstName', e.target.value)} />

@@ -135,14 +135,17 @@ const DepartmentPage = ({ user }) => {
 
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [resyncingId, setResyncingId] = useState(null);
+  const [resyncMsg, setResyncMsg] = useState('');
 
   const handleResync = async (dept) => {
     try {
       setResyncingId(dept.id);
+      setResyncMsg('');
       const res = await apiService.resyncDepartmentMembers(dept.id);
-      alert(res.message);
+      setResyncMsg(res.message);
+      setTimeout(() => setResyncMsg(''), 5000);
     } catch (err) {
-      alert('Resync failed: ' + err.message);
+      setResyncMsg('Resync failed: ' + err.message);
     } finally {
       setResyncingId(null);
     }
@@ -402,7 +405,7 @@ const DepartmentPage = ({ user }) => {
         <Card style={{ marginBottom: '24px' }}>
           <h3 className="cl-settings-heading">Add department or unit</h3>
           <form onSubmit={handleAddDepartment}>
-            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr 1fr', gap: '16px', marginBottom: '8px' }}>
+            <div className="cl-dept-form-grid">
               <div className="ui-field">
                 <label className="ui-label">Type</label>
                 <select className="ui-select" value={newDept.type} onChange={e => setNewDept({ ...newDept, type: e.target.value, parentId: '' })} disabled={loading}>
@@ -751,7 +754,10 @@ const DepartmentPage = ({ user }) => {
 
       <style>{`
         .cl-settings-heading { margin: 0 0 18px; font-size: var(--fs-lg); font-weight: 600; color: var(--c-text); }
-        .cl-dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; }
+        .cl-dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 20px; }
+        .cl-dept-form-grid { display: grid; grid-template-columns: 120px 1fr 1fr 1fr; gap: 16px; margin-bottom: 8px; }
+        @media (max-width: 700px) { .cl-dept-form-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 480px) { .cl-dept-form-grid { grid-template-columns: 1fr; } }
         .cl-dept-card { display: flex; flex-direction: column; }
         .cl-dept-card-top { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
         .cl-dept-card-icon { width: 34px; height: 34px; border-radius: var(--radius-sm); background: var(--c-brand-tint); color: var(--c-brand); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -766,7 +772,6 @@ const DepartmentPage = ({ user }) => {
         .cl-dept-manager { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
         .cl-dept-manager-label { font-size: var(--fs-xs); color: var(--c-text-faint); }
         .cl-dept-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 4px; }
-        .cl-dept-actions .ui-btn { flex: 0 0 auto; }
         .cl-manager-option { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--c-border); display: flex; align-items: center; gap: 10px; }
         .cl-manager-option:hover { background: var(--c-bg); }
         .cl-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }

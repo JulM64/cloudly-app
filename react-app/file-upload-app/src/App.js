@@ -189,7 +189,7 @@ function App() {
         {currentUser && <Navigation currentUser={currentUser} signOut={handleSignOut} />}
 
         <main className={currentUser ? 'cl-app-content' : ''}>
-          <div style={{ maxWidth: '1280px', margin: '0 auto', padding: currentUser ? '24px 32px' : '0' }}>
+          <div className={currentUser ? 'cl-page-container' : ''} style={{ maxWidth: '1280px', margin: '0 auto' }}>
             {message && (
               <div className={`ui-banner ui-banner--${bannerTone}`} style={{ marginBottom: '20px' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

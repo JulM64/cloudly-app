@@ -221,7 +221,7 @@ const AdminPanel = ({ user }) => {
       <PageHeader title="Admin panel" subtitle={<>System administration — logged in as <strong>{user?.email}</strong></>} />
 
       {stats && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: '14px', marginBottom: '24px' }}>
+        <div className="cl-stat-row-6" style={{ marginBottom: '24px' }}>
           {[
             { label: 'Users', value: stats.totalUsers ?? '—' },
             { label: 'Departments', value: stats.totalDepartments ?? '—' },
@@ -370,7 +370,7 @@ const AdminPanel = ({ user }) => {
             {activeTab === 'system' && (
               <div>
                 <h3 style={{ marginBottom: '20px', fontSize: 'var(--fs-lg)', fontWeight: 700 }}>System configuration</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div className="cl-info-pair">
                   {[
                     { title: 'Database', items: [['Provider', 'Amazon DynamoDB'], ['Region', 'us-east-1'], ['Tables', 'departments, files, activities, role-requests']] },
                     { title: 'Storage', items: [['Provider', 'Amazon S3'], ['Bucket prefix', 'cloudly-dept-*'], ['Total files', stats?.totalFiles ?? '—'], ['Total storage', formatBytes(stats?.storageUsed)]] },
@@ -467,7 +467,7 @@ const AdminPanel = ({ user }) => {
                 {stats?.roleCounts && (
                   <div style={{ backgroundColor: 'var(--c-bg)', borderRadius: 'var(--radius-md)', padding: '18px', marginBottom: '24px' }}>
                     <h4 style={{ marginBottom: '16px', fontSize: 'var(--fs-md)', fontWeight: 600 }}>User role distribution</h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '14px' }}>
+                    <div className="cl-stat-row-4">
                       {Object.entries(ROLE_LABEL).map(([role, label]) => (
                         <div key={role} className={`ui-badge ui-badge--${ROLE_TONE[role]}`} style={{ display: 'block', borderRadius: 'var(--radius-md)', padding: '16px', textAlign: 'center' }}>
                           <div style={{ fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>{stats.roleCounts[role] ?? 0}</div>

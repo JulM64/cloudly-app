@@ -10,7 +10,7 @@ const HomePage = ({ user, setMessage }) => {
     <div>
       <PageHeader title={`Welcome back, ${user.firstName}`} subtitle="Upload files to your department's storage." />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px' }}>
+      <div className="cl-split-layout">
         <Card>
           <CardHeader title="File upload" />
           <FileUpload user={user} onUploadSuccess={setMessage} />

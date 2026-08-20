@@ -110,7 +110,7 @@ const LoginPage = ({ onLoginSuccess, onNewPasswordRequired, setMessage }) => {
   return (
     <div style={{ maxWidth: '440px', margin: '48px auto', padding: '0 20px' }}>
       <Card>
-        <img src={logoWordmark} alt="Cloudly" style={{ height: '180px', width: 'auto', display: 'block', margin: '0 auto 20px' }} />
+        <img src={logoWordmark} alt="Cloudly" className="cl-auth-logo" style={{ display: 'block', margin: '0 auto 20px' }} />
         <h1 style={{ textAlign: 'center', marginBottom: '6px', fontSize: 'var(--fs-xl)', fontWeight: 700, color: 'var(--c-text)' }}>{titles[mode]}</h1>
         <p style={{ textAlign: 'center', marginBottom: '24px', color: 'var(--c-text-muted)', fontSize: 'var(--fs-sm)' }}>{subtitles[mode]}</p>
 
@@ -136,7 +136,7 @@ const LoginPage = ({ onLoginSuccess, onNewPasswordRequired, setMessage }) => {
 
         {mode === 'signup' && (
           <form onSubmit={handleSignUp}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <div className="cl-form-pair">
               <div className="ui-field">
                 <label className="ui-label">First name</label>
                 <input className="ui-input" type="text" placeholder="John" value={firstName} onChange={(e) => setFirstName(e.target.value)} required />

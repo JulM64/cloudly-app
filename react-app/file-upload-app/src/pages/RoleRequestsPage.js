@@ -81,7 +81,7 @@ const RoleRequestsPage = ({ user }) => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '16px', marginBottom: '24px' }}>
+      <div className="cl-stat-row-3" style={{ marginBottom: '24px' }}>
         {[
           { label: 'Pending', value: requests.filter(r => r.status === 'PENDING').length, tone: 'warning', key: 'PENDING' },
           { label: 'Approved', value: requests.filter(r => r.status === 'APPROVED').length, tone: 'success', key: 'APPROVED' },

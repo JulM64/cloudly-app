@@ -3,11 +3,11 @@
 // Stitch reference screens. Nav items map 1:1 onto the existing routes in
 // App.js — no route, permission, or auth logic changed, only presentation.
 import React, { useState, useRef, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   IconDashboard, IconDepartments, IconRoles, IconUsers, IconScan,
   IconSettings, IconAdmin, IconSearch, IconBell, IconHelp, IconLogout,
-  IconFolder,
+  IconFolder, IconMenu, IconClose,
 } from './icons';
 import Avatar from './Avatar';
 import apiService from '../services/apiService';
@@ -35,6 +35,7 @@ const Navigation = ({ currentUser, signOut }) => {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -42,6 +43,19 @@ const Navigation = ({ currentUser, signOut }) => {
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
+
+  // Close the mobile drawer automatically whenever the route changes (i.e.
+  // the user tapped a nav link) — otherwise it stays open covering the page
+  // after navigating.
+  const location = useLocation();
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
+
+  // Lock background scroll while the mobile drawer is open, same pattern
+  // any full-screen mobile menu needs.
+  useEffect(() => {
+    document.body.style.overflow = mobileNavOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [mobileNavOpen]);
 
   // Notification badge = pending items this role can actually act on:
   // Super Admin sees pending role-change AND file-delete requests (only
@@ -93,13 +107,18 @@ const Navigation = ({ currentUser, signOut }) => {
 
   return (
     <>
-      <aside className="cl-sidebar">
+      {mobileNavOpen && <div className="cl-sidebar-backdrop" onClick={() => setMobileNavOpen(false)} />}
+
+      <aside className={`cl-sidebar ${mobileNavOpen ? 'cl-sidebar--open' : ''}`}>
         <div className="cl-sidebar-brand">
           <span className="cl-brand-mark">C</span>
           <div>
             <div className="cl-brand-name">Cloudly</div>
             <div className="cl-brand-sub">{ROLE_LABEL[currentUser.role] || 'Member'}</div>
           </div>
+          <button type="button" className="cl-sidebar-close" aria-label="Close menu" onClick={() => setMobileNavOpen(false)}>
+            <IconClose size={18} />
+          </button>
         </div>
 
         <nav className="cl-nav">
@@ -118,6 +137,10 @@ const Navigation = ({ currentUser, signOut }) => {
       </aside>
 
       <header className="cl-topbar">
+        <button type="button" className="cl-hamburger" aria-label="Open menu" onClick={() => setMobileNavOpen(true)}>
+          <IconMenu size={20} />
+        </button>
+
         <div className="cl-topbar-search">
           <IconSearch size={16} />
           <input type="text" placeholder="Search..." aria-label="Search" />

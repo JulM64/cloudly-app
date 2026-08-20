@@ -111,8 +111,38 @@ html, body {
 .recent-uploads::-webkit-scrollbar-thumb { background: var(--c-border-strong); border-radius: 3px; }
 
 /* ---------- Responsive ---------- */
+.cl-page-container { padding: 24px 32px; }
+
+/* Reusable "2fr/1fr main+sidebar" layout (Dashboard, Home) — collapses to
+   a single column once there isn't room for both side by side. */
+.cl-split-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
+
+/* Reusable stat-row grids that were previously hardcoded to a fixed column
+   count (repeat(N,1fr)) and would squish/overflow on narrow screens.
+   auto-fit + minmax lets them reflow to fewer columns automatically. */
+.cl-stat-row-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+.cl-stat-row-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+.cl-stat-row-6 { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 14px; }
+
+/* Two-column form field pairs (first/last name etc.) — stack on phones */
+.cl-form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 480px) { .cl-form-pair { grid-template-columns: 1fr; } }
+
+/* Two-column info/detail cards (denser content than a form field) — stack sooner */
+.cl-info-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 700px) { .cl-info-pair { grid-template-columns: 1fr; } }
+
+.cl-auth-logo { height: 180px; width: auto; }
+@media (max-width: 480px) { .cl-auth-logo { height: 110px; } }
+
 @media (max-width: 768px) {
   .upload-wrapper { padding: 0 var(--space-3); }
   .section-title { font-size: var(--fs-xl); }
   .page-card { padding: var(--space-4); }
+  .cl-page-container { padding: 16px; }
+  .cl-split-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .cl-page-container { padding: 12px; }
 }
