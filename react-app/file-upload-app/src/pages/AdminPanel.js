@@ -8,6 +8,7 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import EditFileModal from '../components/EditFileModal';
 import {
   IconUsers, IconFolder, IconSettings, IconFileText, IconShield, IconPlus,
   IconRefresh, IconTrash, IconClose, IconCheckCircle, IconXCircle,
@@ -64,6 +65,7 @@ const AdminPanel = ({ user }) => {
   const [fileSearch, setFileSearch] = useState('');
   const [deletingFile, setDeletingFile] = useState(null);
   const [fileMsg, setFileMsg]       = useState('');
+  const [editingFile, setEditingFile] = useState(null);
 
   const [userSearch, setUserSearch]   = useState('');
   const [userFilter, setUserFilter]   = useState('ALL');
@@ -348,12 +350,25 @@ const AdminPanel = ({ user }) => {
                       <tbody>
                         {filteredFiles.map((f, i) => (
                           <tr key={f.fileId || i}>
-                            <td><div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}><IconFileText size={16} /><span style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '260px' }}>{f.originalName || f.fileName}</span></div></td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                <IconFileText size={16} />
+                                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--c-text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }}>{f.originalName || f.fileName}</span>
+                                {f.isEdited && <Badge tone="warning" style={{ flexShrink: 0 }}>Edited</Badge>}
+                              </div>
+                            </td>
                             <td>{f.userEmail || '—'}</td>
                             <td>{f.department || '—'}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>{formatBytes(f.fileSize)}</td>
                             <td style={{ whiteSpace: 'nowrap', fontSize: 'var(--fs-xs)', color: 'var(--c-text-faint)' }}>{timeAgo(f.uploadDate)}</td>
-                            <td><Button variant="danger" size="sm" icon={<IconTrash size={13} />} loading={deletingFile === f.fileId} onClick={() => handleDeleteFile(f)}>Delete</Button></td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                {f.userId === user?.userId && (
+                                  <Button variant="secondary" size="sm" icon={<IconEdit size={13} />} onClick={() => setEditingFile(f)}>Edit</Button>
+                                )}
+                                <Button variant="danger" size="sm" icon={<IconTrash size={13} />} loading={deletingFile === f.fileId} onClick={() => handleDeleteFile(f)}>Delete</Button>
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -541,6 +556,10 @@ const AdminPanel = ({ user }) => {
             )}
           </Card>
         </div>
+      )}
+
+      {editingFile && (
+        <EditFileModal file={editingFile} onClose={() => setEditingFile(null)} onSaved={loadAll} />
       )}
     </div>
   );

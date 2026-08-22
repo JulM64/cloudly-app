@@ -11,22 +11,53 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Fail fast if required config is missing, instead of silently misbehaving in prod
-const REQUIRED_ENV = ['AWS_REGION', 'COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
+// Fail fast if required config is missing, instead of silently misbehaving in prod.
+// AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY are intentionally NOT required —
+// in production this app should run under an IAM role (EC2 instance
+// profile / ECS task role) via the AWS SDK's default credential provider
+// chain, not a long-lived key sitting in a .env file. Static keys still
+// work for local development if you set them, but are no longer mandatory.
+const REQUIRED_ENV = ['AWS_REGION', 'COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID'];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length) {
   console.error('❌ Missing required environment variables:', missingEnv.join(', '));
   process.exit(1);
 }
+if (!process.env.AWS_ACCESS_KEY_ID) {
+  console.log('ℹ️  No static AWS_ACCESS_KEY_ID set — using the IAM role attached to this instance/task (recommended for production).');
+}
 
 AWS.config.update({
   region: process.env.AWS_REGION || 'us-east-1',
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  // Only set explicit credentials if provided (local dev convenience).
+  // Omitting these lets the SDK fall back to its default credential chain
+  // (EC2 instance profile / ECS task role / etc.) automatically.
+  ...(process.env.AWS_ACCESS_KEY_ID ? {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  } : {}),
 });
 
+// Customer-managed KMS key for S3 server-side encryption. If unset, new
+// buckets fall back to SSE-S3 (AES256) as before — set this after running
+// Section 2 of aws-security-setup.sh for auditable, revocable encryption.
+const KMS_KEY_ID = process.env.CLOUDLY_KMS_KEY_ID || null;
+
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
-const s3 = new AWS.S3();
+// Hybrid-storage support: if S3_ENDPOINT is set, the app talks to a
+// self-hosted, S3-API-compatible object store (e.g. MinIO running on
+// in-country infrastructure) instead of AWS S3 — same code path either
+// way, since MinIO implements the same API AWS's SDK already speaks.
+// Leave S3_ENDPOINT unset to keep using real AWS S3 exactly as before.
+const s3 = new AWS.S3(
+  process.env.S3_ENDPOINT
+    ? {
+        endpoint: process.env.S3_ENDPOINT,          // e.g. https://minio.your-camtel-server.cm:9000
+        s3ForcePathStyle: true,                       // required for MinIO/most self-hosted S3-compatible stores
+        signatureVersion: 'v4',
+      }
+    : {}
+);
 const cognito = new AWS.CognitoIdentityServiceProvider({ region: process.env.AWS_REGION || 'us-east-1' });
 
 // ── SECURITY HEADERS ──────────────────────────────────────────────────────────
@@ -131,6 +162,14 @@ function verifyCognitoToken(req, res, next) {
         email: decoded.email,
         groups,
         department: decoded['custom:department'] || '',
+        // ID-based reference to the department, alongside the legacy name.
+        // Added so scoping/matching can move off fragile name-string
+        // comparisons — see getScopedDepts below. Older tokens (issued
+        // before this attribute existed / before a user's record was
+        // backfilled) simply won't have it, and every lookup below falls
+        // back to name matching in that case, so nothing breaks for users
+        // who haven't been migrated yet.
+        departmentId: decoded['custom:departmentId'] || '',
         orgId: decoded['custom:orgId'] || '',
         role,
         isAdmin: role === 'SUPER_ADMIN',
@@ -168,16 +207,35 @@ async function logActivity(userId, email, orgId, action, target, details = {}) {
 }
 
 // ── Helper: get scoped depts for a user ───────────────────────────────────────
+// Prefers matching by the user's departmentId (stable, can't go stale on
+// rename) and only falls back to the old name-string comparison for users
+// who haven't been backfilled with a departmentId yet (see
+// backfill-department-ids.js).
 async function getScopedDepts(user, allDepts) {
   const ud = (user.department || '').toLowerCase().trim();
   if (user.role === 'DEPT_HEAD') {
-    const myDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === ud && (!d.type || d.type === 'department'));
+    const myDept = (user.departmentId && allDepts.find(d => d.id === user.departmentId && (!d.type || d.type === 'department')))
+      || allDepts.find(d => (d.name || '').toLowerCase().trim() === ud && (!d.type || d.type === 'department'));
     return myDept ? allDepts.filter(d => d.id === myDept.id || d.parentId === myDept.id) : allDepts.filter(d => (d.name || '').toLowerCase().trim() === ud);
   }
   if (user.role === 'UNIT_HEAD') {
-    return allDepts.filter(d => (d.name || '').toLowerCase().trim() === ud);
+    const myUnit = (user.departmentId && allDepts.find(d => d.id === user.departmentId))
+      || allDepts.find(d => (d.name || '').toLowerCase().trim() === ud);
+    return myUnit ? [myUnit] : [];
   }
   return allDepts; // SUPER_ADMIN
+}
+
+// ── Helper: look up a department's id from its current name ──────────────────
+// Used wherever we need to set custom:departmentId on a Cognito user but
+// only have a department NAME on hand (most call sites, since the frontend
+// still passes names around for display purposes).
+async function findDeptIdByName(orgId, name) {
+  if (!name) return null;
+  const nameLower = name.toLowerCase().trim();
+  const result = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+  const match = (result.Items || []).find((d) => d.orgId === orgId && (d.name || '').toLowerCase().trim() === nameLower);
+  return match?.id || null;
 }
 
 // ── Helper: get scoped member emails for a user ───────────────────────────────
@@ -444,15 +502,21 @@ app.put('/api/users/:email/department', sensitiveLimiter, verifyCognitoToken, re
     const targetUser = listResult.Users[0];
     const targetOrgId = (targetUser.Attributes || []).find(a => a.Name === 'custom:orgId')?.Value;
     if (targetOrgId !== req.user.orgId) return res.status(404).json({ error: 'User not found' });
-    await cognito.adminUpdateUserAttributes({
-      UserPoolId: process.env.COGNITO_USER_POOL_ID,
-      Username: targetUser.Username,
-      UserAttributes: [{ Name: 'custom:department', Value: department }]
-    }).promise();
 
     const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
     const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
     const targetLower = (department || '').toLowerCase().trim();
+    const targetDept = allDepts.find((d) => (d.name || '').toLowerCase().trim() === targetLower);
+
+    await cognito.adminUpdateUserAttributes({
+      UserPoolId: process.env.COGNITO_USER_POOL_ID,
+      Username: targetUser.Username,
+      UserAttributes: [
+        { Name: 'custom:department', Value: department },
+        { Name: 'custom:departmentId', Value: targetDept?.id || '' },
+      ]
+    }).promise();
+
     const others = allDepts.filter(d =>
       (d.name || '').toLowerCase().trim() !== targetLower &&
       Array.isArray(d.membersList) && d.membersList.some(m => m.email === email)
@@ -480,6 +544,7 @@ app.post('/api/users/create', sensitiveLimiter, verifyCognitoToken, requireAdmin
     const { firstName, lastName, email, department, role } = req.body;
     if (!email || !firstName) return res.status(400).json({ error: 'email and firstName required' });
     const tempPassword = `Cloudly${Math.floor(100000 + Math.random() * 900000)}!`;
+    const departmentId = await findDeptIdByName(req.user.orgId, department);
     await cognito.adminCreateUser({
       UserPoolId: process.env.COGNITO_USER_POOL_ID,
       Username: email,
@@ -491,6 +556,7 @@ app.post('/api/users/create', sensitiveLimiter, verifyCognitoToken, requireAdmin
         { Name: 'given_name', Value: firstName },
         { Name: 'family_name', Value: lastName || '' },
         { Name: 'custom:department', Value: department || '' },
+        { Name: 'custom:departmentId', Value: departmentId || '' },
         { Name: 'custom:role', Value: role || 'MEMBER' },
         { Name: 'custom:orgId', Value: req.user.orgId },
       ]
@@ -575,25 +641,22 @@ app.post('/api/role-requests', sensitiveLimiter, verifyCognitoToken, requireHead
       const targetOrgId = (listResult.Users[0].Attributes || []).find(a => a.Name === 'custom:orgId')?.Value;
       if (targetOrgId !== req.user.orgId) return res.status(404).json({ error: 'User not found in Cognito' });
 
-      await cognito.adminUpdateUserAttributes({
-        UserPoolId: process.env.COGNITO_USER_POOL_ID,
-        Username: listResult.Users[0].Username,
-        UserAttributes: [{ Name: 'custom:role', Value: newRole }]
-      }).promise();
-
-      if (department) {
-        await cognito.adminUpdateUserAttributes({
-          UserPoolId: process.env.COGNITO_USER_POOL_ID,
-          Username: listResult.Users[0].Username,
-          UserAttributes: [{ Name: 'custom:department', Value: department }]
-        }).promise();
-      }
-
       const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
       const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
       const targetDeptLower = (department || '').toLowerCase().trim();
-
       const targetDept = allDepts.find(d => (d.name || '').toLowerCase().trim() === targetDeptLower);
+
+      const attrsToUpdate = [{ Name: 'custom:role', Value: newRole }];
+      if (department) {
+        attrsToUpdate.push({ Name: 'custom:department', Value: department });
+        attrsToUpdate.push({ Name: 'custom:departmentId', Value: targetDept?.id || '' });
+      }
+      await cognito.adminUpdateUserAttributes({
+        UserPoolId: process.env.COGNITO_USER_POOL_ID,
+        Username: listResult.Users[0].Username,
+        UserAttributes: attrsToUpdate,
+      }).promise();
+
       if (targetDept) {
         const ml = Array.isArray(targetDept.membersList)
           ? targetDept.membersList.map(m => m.email === targetEmail ? { ...m, role: newRole } : m)
@@ -792,7 +855,11 @@ app.post('/api/departments', sensitiveLimiter, verifyCognitoToken, requireAdmin,
         await s3.putBucketEncryption({
           Bucket: bucketName,
           ServerSideEncryptionConfiguration: {
-            Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+            Rules: [
+              (KMS_KEY_ID && !process.env.S3_ENDPOINT) // KMS key ARNs are AWS-specific — skip if pointed at MinIO/self-hosted storage
+                ? { ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'aws:kms', KMSMasterKeyID: KMS_KEY_ID }, BucketKeyEnabled: true }
+                : { ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+            ],
           },
         }).promise();
         await s3.putBucketCors({ Bucket: bucketName, CORSConfiguration: { CORSRules: [{ AllowedHeaders: ['*'], AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'], AllowedOrigins: allowedOrigins, ExposeHeaders: ['ETag'], MaxAgeSeconds: 3000 }] } }).promise();
@@ -887,7 +954,7 @@ app.post('/api/departments/:id/resync-members', sensitiveLimiter, verifyCognitoT
       return res.json({ message: 'No members on this department to resync.', usersUpdated: 0, filesUpdated: 0 });
     }
 
-    // ---- 1. Force-set custom:department for every listed member ----
+    // ---- 1. Force-set custom:department + custom:departmentId for every listed member ----
     let usersUpdated = 0;
     for (const email of memberEmails) {
       try {
@@ -898,12 +965,16 @@ app.post('/api/departments/:id/resync-members', sensitiveLimiter, verifyCognitoT
         }).promise();
         const cognitoUser = listResult.Users?.[0];
         if (!cognitoUser) continue;
-        const currentAttr = (cognitoUser.Attributes || []).find((a) => a.Name === 'custom:department')?.Value || '';
-        if (currentAttr === currentName) continue; // already correct, skip the write
+        const existingDeptName = (cognitoUser.Attributes || []).find((a) => a.Name === 'custom:department')?.Value || '';
+        const currentDeptId = (cognitoUser.Attributes || []).find((a) => a.Name === 'custom:departmentId')?.Value || '';
+        if (existingDeptName === dept.Item.name && currentDeptId === id) continue; // already correct, skip the write
         await cognito.adminUpdateUserAttributes({
           UserPoolId: process.env.COGNITO_USER_POOL_ID,
           Username: cognitoUser.Username,
-          UserAttributes: [{ Name: 'custom:department', Value: currentName }],
+          UserAttributes: [
+            { Name: 'custom:department', Value: dept.Item.name },
+            { Name: 'custom:departmentId', Value: id },
+          ],
         }).promise();
         usersUpdated++;
       } catch (err) {
@@ -964,7 +1035,15 @@ const ALLOWED_UPLOAD_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'text/plain', 'text/csv',
   'application/zip',
+  // Video — added for the edit/replace feature; MAX_UPLOAD_BYTES below is
+  // still 50MB, which is tight for video. Raise it if real video files need
+  // to go through this (see note on MAX_UPLOAD_BYTES).
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
 ];
+// NOTE: 50MB is small for video specifically — a 2-minute phone video can
+// easily exceed this. Bump this if video uploads need to be practical;
+// left unchanged here since raising it has real cost/storage implications
+// you should decide on deliberately rather than have silently changed.
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 app.post('/api/files/upload-url', uploadLimiter, verifyCognitoToken, async (req, res) => {
@@ -1006,12 +1085,84 @@ app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
     const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType } = req.body;
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, orgId: req.user.orgId, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString() };
+    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, orgId: req.user.orgId, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString(), isEdited: false, lastModifiedAt: null };
     await dynamoDB.put({ TableName: 'cloudly-files', Item: metadata }).promise();
     await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
     res.status(201).json({ message: 'File metadata saved', file: metadata });
   } catch (err) {
     res.status(500).json({ error: 'Failed to save file metadata: ' + err.message });
+  }
+});
+
+// ── EDIT: replace an existing file's content in place ────────────────────────
+// Strictly owner-only — deliberately does NOT allow SUPER_ADMIN or anyone
+// else, per requirement. Returns a presigned POST scoped to the file's
+// EXISTING s3Key (not a new one), so uploading to it overwrites the object
+// in place — the file's identity (fileId, s3Key) never changes, only its
+// bytes and metadata.
+app.post('/api/files/:userId/:fileId/replace-upload-url', uploadLimiter, verifyCognitoToken, async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { fileType } = req.body;
+    if (userId !== req.user.userId) return res.status(403).json({ error: 'Only the person who uploaded this file can edit it' });
+    if (!fileType) return res.status(400).json({ error: 'fileType required' });
+    if (!ALLOWED_UPLOAD_MIME_TYPES.includes(fileType)) return res.status(400).json({ error: 'File type not allowed' });
+
+    const existing = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
+
+    const presigned = await new Promise((resolve, reject) => {
+      s3.createPresignedPost({
+        Bucket: existing.Item.s3Bucket,
+        Fields: { key: existing.Item.s3Key, 'Content-Type': fileType },
+        Conditions: [
+          ['content-length-range', 0, MAX_UPLOAD_BYTES],
+          ['eq', '$Content-Type', fileType],
+          ['eq', '$key', existing.Item.s3Key],
+        ],
+        Expires: 300,
+      }, (err, data) => err ? reject(err) : resolve(data));
+    });
+
+    res.json({ ...presigned, bucket: existing.Item.s3Bucket, key: existing.Item.s3Key });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate replace-upload URL: ' + err.message });
+  }
+});
+
+// ── EDIT: rename and/or confirm a content replacement ─────────────────────────
+// Same ownership rule — strictly the uploader, no exceptions. Call this
+// after either renaming, or after successfully uploading replacement bytes
+// via the replace-upload-url above (or both at once). Always stamps
+// isEdited/lastModifiedAt so every other viewer sees the file was changed,
+// while uploadDate (original upload time) is preserved untouched.
+app.put('/api/files/metadata/:userId/:fileId', verifyCognitoToken, async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { originalName, fileSize, fileType } = req.body;
+    if (userId !== req.user.userId) return res.status(403).json({ error: 'Only the person who uploaded this file can edit it' });
+
+    const existing = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
+
+    const expr = ['set isEdited = :edited, lastModifiedAt = :modAt'];
+    const vals = { ':edited': true, ':modAt': new Date().toISOString() };
+    if (originalName !== undefined && originalName.trim()) { expr.push('originalName = :name'); vals[':name'] = originalName.trim(); }
+    if (fileSize !== undefined) { expr.push('fileSize = :size'); vals[':size'] = fileSize; }
+    if (fileType !== undefined) { expr.push('fileType = :type'); vals[':type'] = fileType; }
+
+    const result = await dynamoDB.update({
+      TableName: 'cloudly-files',
+      Key: { userId, fileId },
+      UpdateExpression: expr.join(', '),
+      ExpressionAttributeValues: vals,
+      ReturnValues: 'ALL_NEW',
+    }).promise();
+
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'EDIT_FILE', originalName || existing.Item.originalName || existing.Item.fileName, { fileId, contentReplaced: fileSize !== undefined });
+    res.json({ message: 'File updated', file: result.Attributes });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update file: ' + err.message });
   }
 });
 

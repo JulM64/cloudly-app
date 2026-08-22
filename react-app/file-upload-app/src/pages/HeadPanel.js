@@ -7,6 +7,7 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import EditFileModal from '../components/EditFileModal';
 import {
   IconUsers, IconFolder, IconRoles, IconFile, IconRefresh, IconTrash,
   IconClose,
@@ -76,6 +77,7 @@ const HeadPanel = ({ user }) => {
   const [requestModalFile, setRequestModalFile] = useState(null);
   const [submittingRequest, setSubmittingRequest] = useState(false);
   const [fileMsg, setFileMsg] = useState('');
+  const [editingFile, setEditingFile] = useState(null);
 
   const roleTone = ROLE_TONE[user?.role] || 'neutral';
   const roleLabel = ROLE_LABEL[user?.role] || 'Member';
@@ -200,13 +202,21 @@ const HeadPanel = ({ user }) => {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
                             <IconFile size={16} />
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, color: 'var(--c-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--fs-sm)' }}>{f.originalName || f.fileName}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--c-text)', fontSize: 'var(--fs-sm)' }}>
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.originalName || f.fileName}</span>
+                                {f.isEdited && <Badge tone="warning" style={{ flexShrink: 0 }}>Edited</Badge>}
+                              </div>
                               <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--c-text-muted)', marginTop: '2px' }}>{f.userEmail || '—'} &middot; {formatBytes(f.fileSize)} &middot; {timeAgo(f.uploadDate)}</div>
                             </div>
                           </div>
-                          <Button variant={isPending ? 'secondary' : 'danger'} size="sm" icon={<IconTrash size={13} />} disabled={isPending} onClick={() => setRequestModalFile(f)}>
-                            {isPending ? 'Requested' : 'Request removal'}
-                          </Button>
+                          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                            {f.userId === user?.userId && (
+                              <Button variant="secondary" size="sm" onClick={() => setEditingFile(f)}>Edit</Button>
+                            )}
+                            <Button variant={isPending ? 'secondary' : 'danger'} size="sm" icon={<IconTrash size={13} />} disabled={isPending} onClick={() => setRequestModalFile(f)}>
+                              {isPending ? 'Requested' : 'Request removal'}
+                            </Button>
+                          </div>
                         </div>
                       );
                     })}
@@ -242,6 +252,10 @@ const HeadPanel = ({ user }) => {
 
       {requestModalFile && (
         <RequestRemovalModal file={requestModalFile} submitting={submittingRequest} onCancel={() => setRequestModalFile(null)} onSubmit={handleSubmitRemovalRequest} />
+      )}
+
+      {editingFile && (
+        <EditFileModal file={editingFile} onClose={() => setEditingFile(null)} onSaved={loadAll} />
       )}
 
       <style>{`.cl-list-row { display:flex; align-items:center; gap:14px; padding:12px 14px; background:var(--c-bg); border-radius:var(--radius-md); }`}</style>

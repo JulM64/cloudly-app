@@ -167,6 +167,8 @@ class ApiService {
   deleteFileMetadata(userId, fileId){ return this.request(`/files/metadata/${userId}/${fileId}`, { method: 'DELETE' }); }
   openFile(userId, fileId)          { return this.request(`/files/open/${userId}/${fileId}`); }
   downloadFile(userId, fileId)      { return this.request(`/files/download/${userId}/${fileId}`); }
+  getReplaceUploadUrl(userId, fileId, fileType) { return this.request(`/files/${userId}/${fileId}/replace-upload-url`, { method: 'POST', body: { fileType } }); }
+  updateFileMetadata(userId, fileId, data)      { return this.request(`/files/metadata/${userId}/${fileId}`, { method: 'PUT', body: data }); }
 
   /**
    * Full secure upload flow in one call:
@@ -206,6 +208,40 @@ class ApiService {
       fileSize: file.size,
       fileType: file.type,
     });
+  }
+
+  /**
+   * Replaces an existing file's content in place (same fileId, same s3Key —
+   * only the bytes and metadata change). Owner-only, enforced server-side.
+   * Marks the file as edited so every other viewer sees it was modified.
+   *
+   * @param {string} userId - the file owner's userId (must match the caller)
+   * @param {string} fileId
+   * @param {File} file - the new file content to upload
+   * @param {(percent: number) => void} [onProgress]
+   * @returns {Promise<object>} the updated file metadata
+   */
+  async replaceFileContent(userId, fileId, file, onProgress) {
+    const { url, fields } = await this.getReplaceUploadUrl(userId, fileId, file.type);
+
+    const formData = new FormData();
+    Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+    formData.append('file', file); // must be appended LAST — S3 ignores fields after this
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+      }
+      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(`S3 upload failed: ${xhr.status}`));
+      xhr.onerror = () => reject(new Error('S3 upload failed: network error'));
+      xhr.send(formData);
+    });
+
+    return this.updateFileMetadata(userId, fileId, { fileSize: file.size, fileType: file.type });
   }
 
   // ── ACTIVITIES ─────────────────────────────────────────────────────────────

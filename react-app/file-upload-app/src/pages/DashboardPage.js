@@ -9,6 +9,7 @@ import StatCard from '../components/ui/StatCard';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import EditFileModal from '../components/EditFileModal';
 import {
   IconFile, IconUsers, IconBuilding, IconLayers, IconEye,
   IconFolder, IconClock, IconAlertCircle, IconClose,
@@ -60,6 +61,7 @@ const DashboardPage = ({ user }) => {
   const [error, setError]         = useState('');
   const [openingFile, setOpeningFile] = useState(null);
   const [openError, setOpenError] = useState('');
+  const [editingFile, setEditingFile] = useState(null);
 
   const roleCfg = ROLE_CONFIG[user?.role] || ROLE_CONFIG.MEMBER;
 
@@ -187,22 +189,31 @@ const DashboardPage = ({ user }) => {
                       <div className="cl-file-row-main">
                         <span className="cl-file-icon"><IconFile size={16} /></span>
                         <div style={{ minWidth: 0 }}>
-                          <div className="cl-file-name">{file.originalName || file.fileName}</div>
+                          <div className="cl-file-name">
+                            <span>{file.originalName || file.fileName}</span>
+                            {file.isEdited && <Badge tone="warning" className="cl-edited-badge">Edited</Badge>}
+                          </div>
                           <div className="cl-file-meta">
                             {timeAgo(file.uploadDate)} &middot; {formatBytes(file.fileSize)}
+                            {file.isEdited && file.lastModifiedAt && <span> &middot; edited {timeAgo(file.lastModifiedAt)}</span>}
                             {file.userEmail && file.userEmail !== user?.email && <span> &middot; {file.userEmail}</span>}
                           </div>
                         </div>
                       </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        icon={<IconEye size={14} />}
-                        loading={openingFile === file.fileId}
-                        onClick={() => handleOpenFile(file)}
-                      >
-                        Open
-                      </Button>
+                      <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                        {file.userId === user?.userId && (
+                          <Button variant="secondary" size="sm" icon={<IconEdit size={14} />} onClick={() => setEditingFile(file)}>Edit</Button>
+                        )}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          icon={<IconEye size={14} />}
+                          loading={openingFile === file.fileId}
+                          onClick={() => handleOpenFile(file)}
+                        >
+                          Open
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -246,12 +257,18 @@ const DashboardPage = ({ user }) => {
         .cl-file-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; background:var(--c-bg); border-radius:var(--radius-md); margin-bottom:10px; }
         .cl-file-row-main { display:flex; align-items:center; gap:12px; min-width:0; flex:1; }
         .cl-file-icon { color: var(--c-text-faint); flex-shrink:0; display:flex; }
-        .cl-file-name { font-weight:600; color:var(--c-text); font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cl-file-name { display:flex; align-items:center; gap:6px; font-weight:600; color:var(--c-text); font-size:var(--fs-sm); min-width:0; }
+        .cl-file-name > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cl-edited-badge { flex-shrink:0; }
         .cl-file-meta { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:2px; }
         .cl-activity-row { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:var(--c-bg); border-radius:var(--radius-md); }
         .cl-activity-dot { width:28px; height:28px; border-radius:50%; background:var(--c-success-bg); color:var(--c-success); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
         .cl-activity-dot--you { background:var(--c-brand-tint); color:var(--c-brand); }
       `}</style>
+
+      {editingFile && (
+        <EditFileModal file={editingFile} onClose={() => setEditingFile(null)} onSaved={loadStats} />
+      )}
     </div>
   );
 };
