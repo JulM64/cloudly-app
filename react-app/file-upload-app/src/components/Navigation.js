@@ -7,7 +7,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   IconDashboard, IconDepartments, IconRoles, IconUsers, IconScan,
   IconSettings, IconAdmin, IconSearch, IconBell, IconHelp, IconLogout,
-  IconFolder, IconMenu, IconClose,
+  IconFolder, IconLayers, IconMenu, IconClose,
 } from './icons';
 import Avatar from './Avatar';
 import apiService from '../services/apiService';
@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: IconFolder, roles: null },
   { to: '/dashboard', label: 'Dashboard', icon: IconDashboard, roles: null },
   { to: '/departments', label: 'Departments', icon: IconDepartments, roles: ['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'] },
+  { to: '/archive', label: 'Archive', icon: IconLayers, roles: ['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'] },
   { to: '/role-requests', label: 'Roles', icon: IconRoles, roles: ['SUPER_ADMIN', 'DEPT_HEAD'] },
   { to: '/team', label: 'Team', icon: IconUsers, roles: ['DEPT_HEAD', 'UNIT_HEAD'] },
   { to: '/scan', label: 'Scan', icon: IconScan, roles: null },

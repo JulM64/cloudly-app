@@ -173,3 +173,11 @@ export const IconLayers = (p) => (
 export const IconImage = (p) => (
   <svg {...base(p)}><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.75" /><path d="M21 17l-5.5-5.5L6 21" /></svg>
 );
+
+export const IconFolderMove = (p) => (
+  <svg {...base(p)}><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z" /><path d="M9 15l3-3 3 3" /><path d="M12 12v6" /></svg>
+);
+
+export const IconVideo = (p) => (
+  <svg {...base(p)}><rect x="2" y="6" width="14" height="12" rx="2" /><path d="M22 8.5l-6 3.5 6 3.5v-7z" /></svg>
+);

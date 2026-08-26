@@ -806,6 +806,29 @@ app.get('/api/departments', verifyCognitoToken, async (req, res) => {
       const scoped = await getScopedDepts(req.user, allDepts);
       departments = scoped;
     }
+
+    // Storage Used was never actually computed anywhere — department
+    // records don't carry a running total, so it has to be derived from
+    // the files themselves. Scan once, sum by department name, attach to
+    // each department in the response.
+    const filesResult = await dynamoDB.scan({
+      TableName: 'cloudly-files',
+      FilterExpression: 'orgId = :orgId',
+      ExpressionAttributeValues: { ':orgId': req.user.orgId },
+    }).promise();
+    const usageByDept = {};
+    for (const f of filesResult.Items || []) {
+      const key = (f.department || '').toLowerCase().trim();
+      if (!key) continue;
+      if (!usageByDept[key]) usageByDept[key] = { storageUsed: 0, fileCount: 0 };
+      usageByDept[key].storageUsed += f.fileSize || 0;
+      usageByDept[key].fileCount += 1;
+    }
+    departments = departments.map((d) => {
+      const usage = usageByDept[(d.name || '').toLowerCase().trim()] || { storageUsed: 0, fileCount: 0 };
+      return { ...d, storageUsed: usage.storageUsed, fileCount: usage.fileCount };
+    });
+
     departments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ departments });
   } catch (err) {
@@ -1021,6 +1044,244 @@ app.post('/api/departments/:id/resync-members', sensitiveLimiter, verifyCognitoT
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ARCHIVE — folders for organizing department files
+// SUPER_ADMIN can browse/manage every department's archive. DEPT_HEAD and
+// UNIT_HEAD can only browse/manage their own department/unit's archive —
+// enforced the same way as everywhere else in this file, via
+// getScopedDepts(). Not exposed to MEMBER (matches Departments/Team pages,
+// which are also Head-or-Admin only).
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Returns the department names the current user is allowed to browse in
+// the Archive — every department for SUPER_ADMIN, just their own
+// department (+ its units) for DEPT_HEAD, just their own unit for
+// UNIT_HEAD. Powers the department picker on the Archive page.
+app.get('/api/folders/departments', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
+    const scoped = req.user.role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
+    res.json({ departments: scoped.map((d) => ({ id: d.id, name: d.name, type: d.type || 'department' })) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch archive departments: ' + err.message });
+  }
+});
+
+// Flat list of EVERY folder in a department (not just one level) — powers
+// the "Move to…" picker, which needs the whole tree to render, not just
+// whatever's in the folder currently being viewed.
+app.get('/api/folders/all', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { department } = req.query;
+    const targetDept = req.user.role === 'SUPER_ADMIN' ? department : req.user.department;
+    if (!targetDept) return res.status(400).json({ error: 'department is required' });
+    if (!(await assertDepartmentInScope(req, targetDept))) return res.status(403).json({ error: 'You cannot view this department\u2019s archive' });
+
+    const result = await dynamoDB.scan({ TableName: 'cloudly-folders' }).promise();
+    const deptLower = targetDept.toLowerCase().trim();
+    const folders = (result.Items || []).filter((f) => f.orgId === req.user.orgId && (f.department || '').toLowerCase().trim() === deptLower);
+    res.json({ folders });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch folder tree: ' + err.message });
+  }
+});
+
+// Shared helper: is this department name one the current user is allowed
+// to touch? Every folder/file-organize endpoint below checks this before
+// doing anything, so a Dept Head can never reach into another department's
+// archive just by guessing/editing an id in a request.
+async function assertDepartmentInScope(req, departmentName) {
+  if (req.user.role === 'SUPER_ADMIN') return true;
+  const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+  const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
+  const scoped = await getScopedDepts(req.user, allDepts);
+  const allowedNames = new Set(scoped.map((d) => (d.name || '').toLowerCase().trim()));
+  return allowedNames.has((departmentName || '').toLowerCase().trim());
+}
+
+app.post('/api/folders', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { name, department, parentFolderId } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Folder name is required' });
+    const targetDept = req.user.role === 'SUPER_ADMIN' ? department : req.user.department;
+    if (!targetDept) return res.status(400).json({ error: 'department is required' });
+    if (!(await assertDepartmentInScope(req, targetDept))) return res.status(403).json({ error: 'You cannot create folders in this department' });
+
+    if (parentFolderId) {
+      const parent = await dynamoDB.get({ TableName: 'cloudly-folders', Key: { id: parentFolderId } }).promise();
+      if (!parent.Item || parent.Item.orgId !== req.user.orgId || (parent.Item.department || '').toLowerCase().trim() !== targetDept.toLowerCase().trim()) {
+        return res.status(404).json({ error: 'Parent folder not found' });
+      }
+    }
+
+    const folder = {
+      id: `folder_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      orgId: req.user.orgId,
+      department: targetDept,
+      parentFolderId: parentFolderId || null,
+      name: name.trim(),
+      createdBy: req.user.email,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await dynamoDB.put({ TableName: 'cloudly-folders', Item: folder }).promise();
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'CREATE_FOLDER', name, { department: targetDept });
+    res.status(201).json({ message: 'Folder created', folder });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create folder: ' + err.message });
+  }
+});
+
+// Lists both the subfolders AND the files sitting directly inside a given
+// folder (or the department's root, if parentFolderId/folderId is omitted)
+// — this is the single call the Archive page makes each time you navigate
+// into a folder.
+app.get('/api/folders/contents', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { department, folderId } = req.query;
+    const targetDept = req.user.role === 'SUPER_ADMIN' ? department : req.user.department;
+    if (!targetDept) return res.status(400).json({ error: 'department is required' });
+    if (!(await assertDepartmentInScope(req, targetDept))) return res.status(403).json({ error: 'You cannot view this department\u2019s archive' });
+
+    const deptLower = targetDept.toLowerCase().trim();
+
+    const [foldersResult, filesResult] = await Promise.all([
+      dynamoDB.scan({ TableName: 'cloudly-folders' }).promise(),
+      dynamoDB.scan({ TableName: 'cloudly-files', FilterExpression: 'orgId = :orgId', ExpressionAttributeValues: { ':orgId': req.user.orgId } }).promise(),
+    ]);
+
+    const folders = (foldersResult.Items || []).filter((f) =>
+      f.orgId === req.user.orgId &&
+      (f.department || '').toLowerCase().trim() === deptLower &&
+      (f.parentFolderId || null) === (folderId || null)
+    );
+    const files = (filesResult.Items || []).filter((f) =>
+      (f.department || '').toLowerCase().trim() === deptLower &&
+      (f.folderId || null) === (folderId || null)
+    );
+
+    // Breadcrumb trail back to root, for the page header
+    const breadcrumb = [];
+    if (folderId) {
+      let current = (foldersResult.Items || []).find((f) => f.id === folderId);
+      while (current) {
+        breadcrumb.unshift({ id: current.id, name: current.name });
+        current = current.parentFolderId ? (foldersResult.Items || []).find((f) => f.id === current.parentFolderId) : null;
+      }
+    }
+
+    res.json({ folders, files, breadcrumb });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load folder contents: ' + err.message });
+  }
+});
+
+app.put('/api/folders/:id', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, parentFolderId } = req.body;
+    const existing = await dynamoDB.get({ TableName: 'cloudly-folders', Key: { id } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Folder not found' });
+    if (!(await assertDepartmentInScope(req, existing.Item.department))) return res.status(403).json({ error: 'You cannot modify this folder' });
+
+    // If moving, the new parent must (a) exist, (b) be in the same
+    // department, and (c) not be this folder or one of its own descendants
+    // — otherwise you could create a folder that's its own ancestor.
+    if (parentFolderId !== undefined && parentFolderId !== existing.Item.parentFolderId) {
+      if (parentFolderId) {
+        const allFolders = (await dynamoDB.scan({ TableName: 'cloudly-folders' }).promise()).Items || [];
+        const newParent = allFolders.find((f) => f.id === parentFolderId);
+        if (!newParent || newParent.orgId !== req.user.orgId || (newParent.department || '').toLowerCase().trim() !== (existing.Item.department || '').toLowerCase().trim()) {
+          return res.status(404).json({ error: 'Target folder not found' });
+        }
+        let walk = newParent;
+        while (walk) {
+          if (walk.id === id) return res.status(400).json({ error: 'Cannot move a folder into itself or one of its own subfolders' });
+          walk = walk.parentFolderId ? allFolders.find((f) => f.id === walk.parentFolderId) : null;
+        }
+      }
+    }
+
+    const expr = ['set updatedAt = :ua'];
+    const vals = { ':ua': new Date().toISOString() };
+    if (name !== undefined && name.trim()) { expr.push('#name = :name'); vals[':name'] = name.trim(); }
+    if (parentFolderId !== undefined) { expr.push('parentFolderId = :pid'); vals[':pid'] = parentFolderId || null; }
+    const params = { TableName: 'cloudly-folders', Key: { id }, UpdateExpression: expr.join(', '), ExpressionAttributeValues: vals, ReturnValues: 'ALL_NEW' };
+    if (name !== undefined && name.trim()) params.ExpressionAttributeNames = { '#name': 'name' };
+
+    const result = await dynamoDB.update(params).promise();
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPDATE_FOLDER', result.Attributes.name, {});
+    res.json({ message: 'Folder updated', folder: result.Attributes });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update folder: ' + err.message });
+  }
+});
+
+app.delete('/api/folders/:id', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await dynamoDB.get({ TableName: 'cloudly-folders', Key: { id } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'Folder not found' });
+    if (!(await assertDepartmentInScope(req, existing.Item.department))) return res.status(403).json({ error: 'You cannot delete this folder' });
+
+    const [subfolders, filesInside] = await Promise.all([
+      dynamoDB.scan({ TableName: 'cloudly-folders', FilterExpression: 'parentFolderId = :id', ExpressionAttributeValues: { ':id': id } }).promise(),
+      dynamoDB.scan({ TableName: 'cloudly-files', FilterExpression: 'folderId = :id', ExpressionAttributeValues: { ':id': id } }).promise(),
+    ]);
+    if ((subfolders.Items || []).length > 0 || (filesInside.Items || []).length > 0) {
+      return res.status(400).json({ error: 'This folder is not empty — move or delete its contents first' });
+    }
+
+    await dynamoDB.delete({ TableName: 'cloudly-folders', Key: { id } }).promise();
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'DELETE_FOLDER', existing.Item.name, {});
+    res.json({ message: 'Folder deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete folder: ' + err.message });
+  }
+});
+
+// Rename and/or move a file into a folder. Deliberately a DIFFERENT
+// endpoint and permission model from PUT /api/files/metadata/:userId/:fileId
+// (which is the strictly-owner-only personal "Edit" feature) — this one is
+// for archive management, so anyone with Head/Admin scope over the file's
+// department can organize it, not just whoever originally uploaded it.
+app.put('/api/files/:userId/:fileId/organize', sensitiveLimiter, verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { originalName, folderId } = req.body;
+    const existing = await dynamoDB.get({ TableName: 'cloudly-files', Key: { userId, fileId } }).promise();
+    if (!existing.Item || existing.Item.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
+    if (!(await assertDepartmentInScope(req, existing.Item.department))) return res.status(403).json({ error: 'You cannot organize this file' });
+
+    if (folderId !== undefined && folderId !== null) {
+      const folder = await dynamoDB.get({ TableName: 'cloudly-folders', Key: { id: folderId } }).promise();
+      if (!folder.Item || folder.Item.orgId !== req.user.orgId || (folder.Item.department || '').toLowerCase().trim() !== (existing.Item.department || '').toLowerCase().trim()) {
+        return res.status(404).json({ error: 'Target folder not found' });
+      }
+    }
+
+    const expr = [];
+    const vals = {};
+    if (originalName !== undefined && originalName.trim()) { expr.push('originalName = :name'); vals[':name'] = originalName.trim(); }
+    if (folderId !== undefined) { expr.push('folderId = :fid'); vals[':fid'] = folderId || null; }
+    if (expr.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+    const result = await dynamoDB.update({
+      TableName: 'cloudly-files',
+      Key: { userId, fileId },
+      UpdateExpression: 'set ' + expr.join(', '),
+      ExpressionAttributeValues: vals,
+      ReturnValues: 'ALL_NEW',
+    }).promise();
+
+    await logActivity(req.user.userId, req.user.email, req.user.orgId, 'ORGANIZE_FILE', originalName || existing.Item.originalName || existing.Item.fileName, { movedTo: folderId ?? undefined });
+    res.json({ message: 'File updated', file: result.Attributes });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to organize file: ' + err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // FILE ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1083,9 +1344,22 @@ app.post('/api/files/upload-url', uploadLimiter, verifyCognitoToken, async (req,
 
 app.post('/api/files/metadata', verifyCognitoToken, async (req, res) => {
   try {
-    const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType } = req.body;
+    const { fileName, originalName, s3Key, s3Bucket, fileSize, fileType, folderId } = req.body;
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, orgId: req.user.orgId, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString(), isEdited: false, lastModifiedAt: null };
+
+    // If uploading into a specific folder (from the Archive page), confirm
+    // that folder actually exists, belongs to this org, and is in the
+    // uploader's own department — you can't upload into someone else's
+    // department's folder by guessing an id.
+    let resolvedFolderId = null;
+    if (folderId) {
+      const folder = await dynamoDB.get({ TableName: 'cloudly-folders', Key: { id: folderId } }).promise();
+      if (folder.Item && folder.Item.orgId === req.user.orgId && (folder.Item.department || '').toLowerCase().trim() === (req.user.department || '').toLowerCase().trim()) {
+        resolvedFolderId = folderId;
+      }
+    }
+
+    const metadata = { userId: req.user.userId, fileId, fileName, originalName, s3Key, s3Bucket, department: req.user.department, orgId: req.user.orgId, userEmail: req.user.email, fileSize: fileSize || 0, fileType: fileType || 'unknown', uploadDate: new Date().toISOString(), isEdited: false, lastModifiedAt: null, folderId: resolvedFolderId };
     await dynamoDB.put({ TableName: 'cloudly-files', Item: metadata }).promise();
     await logActivity(req.user.userId, req.user.email, req.user.orgId, 'UPLOAD_FILE', fileName, { s3Key, fileSize });
     res.status(201).json({ message: 'File metadata saved', file: metadata });

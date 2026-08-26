@@ -116,6 +116,19 @@ class ApiService {
   deleteDepartment(id)       { return this.request(`/departments/${id}`, { method: 'DELETE' }); }
   resyncDepartmentMembers(id) { return this.request(`/departments/${id}/resync-members`, { method: 'POST' }); }
 
+  // ── ARCHIVE (folders) ────────────────────────────────────────────────────
+  getArchiveDepartments()                 { return this.request('/folders/departments'); }
+  getAllFolders(department)               { return this.request(`/folders/all?department=${encodeURIComponent(department)}`); }
+  getFolderContents(department, folderId) {
+    const params = new URLSearchParams({ department });
+    if (folderId) params.set('folderId', folderId);
+    return this.request(`/folders/contents?${params.toString()}`);
+  }
+  createFolder(data)              { return this.request('/folders', { method: 'POST', body: data }); }
+  updateFolder(id, data)          { return this.request(`/folders/${id}`, { method: 'PUT', body: data }); }
+  deleteFolder(id)                { return this.request(`/folders/${id}`, { method: 'DELETE' }); }
+  organizeFile(userId, fileId, data) { return this.request(`/files/${userId}/${fileId}/organize`, { method: 'PUT', body: data }); }
+
   // ── USERS ──────────────────────────────────────────────────────────────────
   getUsers(lastKey = null, limit = 60) {
     const params = new URLSearchParams({ limit });
@@ -178,9 +191,10 @@ class ApiService {
    *
    * @param {File} file - the raw File object from an <input type="file"> or drop event
    * @param {(percent: number) => void} [onProgress] - optional progress callback (0-100)
+   * @param {string} [folderId] - optional Archive folder to upload directly into
    * @returns {Promise<object>} the saved file metadata
    */
-  async uploadFile(file, onProgress) {
+  async uploadFile(file, onProgress, folderId) {
     const { url, fields, bucket, key } = await this.getUploadUrl(file.name, file.type);
 
     const formData = new FormData();
@@ -207,6 +221,7 @@ class ApiService {
       s3Bucket: bucket,
       fileSize: file.size,
       fileType: file.type,
+      ...(folderId ? { folderId } : {}),
     });
   }
 

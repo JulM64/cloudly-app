@@ -17,6 +17,7 @@ import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
 import AdminPanel from './pages/AdminPanel';
 import DepartmentPage from './pages/DepartmentPage';
+import ArchivePage from './pages/ArchivePage';
 import RoleRequestsPage from './pages/RoleRequestsPage';
 import HeadPanel from './pages/HeadPanel';
 import ScanPage from './pages/ScanPage';
@@ -228,6 +229,7 @@ function App() {
               <Route path="/scan" element={<ProtectedRoute><ScanPage user={currentUser} /></ProtectedRoute>} />
 
               <Route path="/departments" element={<HeadRoute><DepartmentPage user={currentUser} setMessage={setMessage} /></HeadRoute>} />
+              <Route path="/archive" element={<HeadRoute><ArchivePage user={currentUser} /></HeadRoute>} />
               <Route path="/role-requests" element={<RoleRequestsRoute><RoleRequestsPage user={currentUser} /></RoleRequestsRoute>} />
               <Route path="/team" element={<TeamRoute><HeadPanel user={currentUser} /></TeamRoute>} />
               <Route path="/admin" element={<AdminRoute><AdminPanel user={currentUser} /></AdminRoute>} />
