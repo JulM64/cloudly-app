@@ -14,6 +14,7 @@ import {
   IconFile, IconUsers, IconBuilding, IconLayers, IconEye,
   IconFolder, IconClock, IconAlertCircle, IconClose,
   IconUploadCloud, IconEdit, IconCheckCircle, IconXCircle, IconRoles,
+  IconDownload,
 } from '../components/icons';
 
 const ROLE_CONFIG = {
@@ -119,6 +120,15 @@ const DashboardPage = ({ user }) => {
     }
   };
 
+  const handleDownloadFile = async (file) => {
+    try {
+      const res = await apiService.downloadFile(file.userId, file.fileId);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setOpenError('Failed to download file: ' + err.message);
+    }
+  };
+
   const scopeLabel =
     stats?.scope === 'GLOBAL'     ? 'Organization-wide' :
     stats?.scope === 'DEPARTMENT' ? `Department: ${user?.department}` :
@@ -213,6 +223,7 @@ const DashboardPage = ({ user }) => {
                         >
                           Open
                         </Button>
+                        <Button variant="secondary" size="sm" icon={<IconDownload size={14} />} onClick={() => handleDownloadFile(file)} />
                       </div>
                     </div>
                   ))}

@@ -1086,6 +1086,38 @@ app.get('/api/folders/all', verifyCognitoToken, requireHeadOrAdmin, async (req, 
   }
 });
 
+// Search across every folder AND file the current user can see — every
+// department for SUPER_ADMIN, just their own scope for DEPT_HEAD/UNIT_HEAD.
+// This is what the topbar search bar calls when used from the Archive page.
+app.get('/api/archive/search', verifyCognitoToken, requireHeadOrAdmin, async (req, res) => {
+  try {
+    const q = (req.query.q || '').toLowerCase().trim();
+    if (!q) return res.json({ files: [], folders: [] });
+
+    const deptResult = await dynamoDB.scan({ TableName: 'cloudly-departments' }).promise();
+    const allDepts = (deptResult.Items || []).filter((d) => d.orgId === req.user.orgId);
+    const scopedDepts = req.user.role === 'SUPER_ADMIN' ? allDepts : await getScopedDepts(req.user, allDepts);
+    const scopedDeptNames = new Set(scopedDepts.map((d) => (d.name || '').toLowerCase().trim()));
+
+    const [filesResult, foldersResult] = await Promise.all([
+      dynamoDB.scan({ TableName: 'cloudly-files', FilterExpression: 'orgId = :orgId', ExpressionAttributeValues: { ':orgId': req.user.orgId } }).promise(),
+      dynamoDB.scan({ TableName: 'cloudly-folders' }).promise(),
+    ]);
+
+    const files = (filesResult.Items || [])
+      .filter((f) => scopedDeptNames.has((f.department || '').toLowerCase().trim()) && (f.originalName || f.fileName || '').toLowerCase().includes(q))
+      .slice(0, 50);
+
+    const folders = (foldersResult.Items || [])
+      .filter((f) => f.orgId === req.user.orgId && scopedDeptNames.has((f.department || '').toLowerCase().trim()) && (f.name || '').toLowerCase().includes(q))
+      .slice(0, 50);
+
+    res.json({ files, folders });
+  } catch (err) {
+    res.status(500).json({ error: 'Search failed: ' + err.message });
+  }
+});
+
 // Shared helper: is this department name one the current user is allowed
 // to touch? Every folder/file-organize endpoint below checks this before
 // doing anything, so a Dept Head can never reach into another department's
@@ -1474,6 +1506,41 @@ app.get('/api/files/open/:userId/:fileId', verifyCognitoToken, async (req, res) 
   } catch (err) {
     console.error('File open error:', err);
     res.status(500).json({ error: 'Failed to generate file URL: ' + err.message });
+  }
+});
+
+// ── DOWNLOAD: forces a save-to-disk instead of opening inline ────────────────
+// apiService.js has had a downloadFile() method pointing at this exact path
+// for a while, but this route never actually existed on the server — it was
+// dropped at some point and never carried forward, so every call to it was
+// silently 404ing. Same access rules as /open above, only the
+// Content-Disposition differs (attachment vs inline).
+app.get('/api/files/download/:userId/:fileId', verifyCognitoToken, async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const result = await dynamoDB.query({
+      TableName: 'cloudly-files',
+      KeyConditionExpression: 'userId = :uid AND fileId = :fid',
+      ExpressionAttributeValues: { ':uid': userId, ':fid': fileId }
+    }).promise();
+    if (!result.Items?.length) return res.status(404).json({ error: 'File not found' });
+    const file = result.Items[0];
+    if (file.orgId !== req.user.orgId) return res.status(404).json({ error: 'File not found' });
+    const canAccess = req.user.userId === userId ||
+      req.user.role === 'SUPER_ADMIN' ||
+      req.user.role === 'DEPT_HEAD' ||
+      req.user.department === file.department;
+    if (!canAccess) return res.status(403).json({ error: 'Access denied' });
+    const url = s3.getSignedUrl('getObject', {
+      Bucket: file.s3Bucket,
+      Key: file.s3Key,
+      Expires: 900,
+      ResponseContentDisposition: `attachment; filename="${(file.originalName || file.fileName).replace(/"/g, '')}"`,
+    });
+    res.json({ url, fileName: file.originalName || file.fileName, fileType: file.fileType });
+  } catch (err) {
+    console.error('File download error:', err);
+    res.status(500).json({ error: 'Failed to generate download URL: ' + err.message });
   }
 });
 

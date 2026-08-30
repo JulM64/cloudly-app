@@ -25,6 +25,8 @@ const NAV_ITEMS = [
   { to: '/admin', label: 'Admin Panel', icon: IconAdmin, roles: ['SUPER_ADMIN'] },
 ];
 
+const ARCHIVE_ROLES = ['SUPER_ADMIN', 'DEPT_HEAD', 'UNIT_HEAD'];
+
 const ROLE_LABEL = {
   SUPER_ADMIN: 'Enterprise Admin',
   DEPT_HEAD: 'Department Head',
@@ -37,6 +39,14 @@ const Navigation = ({ currentUser, signOut }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const canSearchArchive = ARCHIVE_ROLES.includes(currentUser?.role);
+
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    if (!canSearchArchive || !searchQuery.trim()) return;
+    navigate(`/archive?q=${encodeURIComponent(searchQuery.trim())}`);
+  };
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -142,10 +152,16 @@ const Navigation = ({ currentUser, signOut }) => {
           <IconMenu size={20} />
         </button>
 
-        <div className="cl-topbar-search">
+        <form className="cl-topbar-search" onSubmit={handleSearchSubmit}>
           <IconSearch size={16} />
-          <input type="text" placeholder="Search..." aria-label="Search" />
-        </div>
+          <input
+            type="text"
+            placeholder={canSearchArchive ? 'Search archive...' : 'Search...'}
+            aria-label="Search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </form>
 
         <div className="cl-topbar-actions">
           <button type="button" className="cl-icon-btn" aria-label={notificationCount > 0 ? `${notificationCount} notifications` : 'Notifications'} onClick={handleBellClick}>

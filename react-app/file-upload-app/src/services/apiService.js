@@ -119,6 +119,7 @@ class ApiService {
   // ── ARCHIVE (folders) ────────────────────────────────────────────────────
   getArchiveDepartments()                 { return this.request('/folders/departments'); }
   getAllFolders(department)               { return this.request(`/folders/all?department=${encodeURIComponent(department)}`); }
+  searchArchive(query)                    { return this.request(`/archive/search?q=${encodeURIComponent(query)}`); }
   getFolderContents(department, folderId) {
     const params = new URLSearchParams({ department });
     if (folderId) params.set('folderId', folderId);
